@@ -41,6 +41,8 @@ export const translations = {
     // Special turn
     specialTurn: 'תור מיוחד',
     specialTurnDesc: '5 קלפים ללא הגבלת זמן',
+    specialTurnRequired: 'תור מיוחד!',
+    specialTurnDescription: 'עמדת על משבצת מיוחדת - חובה לשחק תור מיוחד',
     startSpecialTurn: 'התחל תור מיוחד',
     yourTeamGuessed: 'הקבוצה שלך ניחשה',
     opponentTeamGuessed: 'הקבוצה השנייה ניחשה',
@@ -125,6 +127,8 @@ export const translations = {
     // Special turn
     specialTurn: 'Special Turn',
     specialTurnDesc: '5 cards with no time limit',
+    specialTurnRequired: 'Special Turn!',
+    specialTurnDescription: 'You landed on a special cell - must play a special turn',
     startSpecialTurn: 'Start Special Turn',
     yourTeamGuessed: 'Your team guessed',
     opponentTeamGuessed: 'Opponent guessed',

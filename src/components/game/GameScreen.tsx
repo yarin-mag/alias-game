@@ -21,6 +21,7 @@ import {
   checkWinner,
   saveGameState,
   playSound,
+  isSpecialTurnPosition,
   Card,
 } from '@/lib/gameLogic';
 import { Language, useTranslation } from '@/lib/i18n';
@@ -48,6 +49,9 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
 
   const currentTeam = gameState.teams[gameState.currentTeamIndex];
   const opponentTeam = gameState.teams[gameState.currentTeamIndex === 0 ? 1 : 0];
+  
+  // Check if current position is a special turn position
+  const isCurrentPositionSpecial = isSpecialTurnPosition(currentTeam.position);
 
   // Timer effect
   useEffect(() => {
@@ -152,6 +156,8 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
     setShowTurnEnd(true);
     setShowOpponentQuestion(true);
     
+    const movement = calculateMovement(turnCorrect, turnSkipped, gameState.allowNegative);
+    
     if (currentCard) {
       setGameState((prev) => ({
         ...prev,
@@ -160,70 +166,77 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
         turnResult: {
           correct: turnCorrect,
           skipped: turnSkipped,
-          movement: calculateMovement(turnCorrect, turnSkipped, prev.allowNegative),
+          movement,
+          opponentBonus: false,
+        },
+        // Store pending movement - don't apply yet
+        pendingMovement: {
+          teamIndex: prev.currentTeamIndex,
+          movement,
           opponentBonus: false,
         },
       }));
     }
-  }, [currentCard, turnCorrect, turnSkipped, currentTeam.position]);
+  }, [currentCard, turnCorrect, turnSkipped, currentTeam.position, gameState.allowNegative]);
 
   const handleOpponentGuessed = (guessed: boolean) => {
     setShowOpponentQuestion(false);
     
-    const movement = calculateMovement(turnCorrect, turnSkipped, gameState.allowNegative);
+    // Update pending movement with opponent bonus info
+    setGameState((prev) => ({
+      ...prev,
+      pendingMovement: prev.pendingMovement ? {
+        ...prev.pendingMovement,
+        opponentBonus: guessed,
+      } : null,
+      turnResult: prev.turnResult ? {
+        ...prev.turnResult,
+        opponentBonus: guessed,
+      } : null,
+    }));
+  };
+
+  const handleNextTurn = () => {
+    setShowTurnEnd(false);
     
+    // Apply pending movement NOW when user clicks Next
     setGameState((prev) => {
+      if (!prev.pendingMovement) return prev;
+      
       const newTeams = [...prev.teams] as [typeof prev.teams[0], typeof prev.teams[1]];
       
       // Apply movement to current team
-      newTeams[prev.currentTeamIndex] = {
-        ...newTeams[prev.currentTeamIndex],
-        position: applyMovement(newTeams[prev.currentTeamIndex].position, movement),
+      newTeams[prev.pendingMovement.teamIndex] = {
+        ...newTeams[prev.pendingMovement.teamIndex],
+        position: applyMovement(
+          newTeams[prev.pendingMovement.teamIndex].position, 
+          prev.pendingMovement.movement
+        ),
       };
       
       // Apply opponent bonus if guessed
-      if (guessed) {
-        const opponentIndex = prev.currentTeamIndex === 0 ? 1 : 0;
+      if (prev.pendingMovement.opponentBonus) {
+        const opponentIndex = prev.pendingMovement.teamIndex === 0 ? 1 : 0;
         newTeams[opponentIndex] = {
           ...newTeams[opponentIndex],
           position: applyMovement(newTeams[opponentIndex].position, 1),
         };
       }
       
+      // Check for winner
+      const winnerIndex = newTeams.findIndex((t) => checkWinner(t.position));
+      
       return {
         ...prev,
         teams: newTeams,
-        turnResult: {
-          correct: turnCorrect,
-          skipped: turnSkipped,
-          movement,
-          opponentBonus: guessed,
-        },
+        phase: winnerIndex !== -1 ? 'winner' : 'playing',
+        currentTeamIndex: prev.currentTeamIndex === 0 ? 1 : 0,
+        turnResult: null,
+        lastUnresolvedWord: null,
+        pendingMovement: null,
       };
     });
-  };
-
-  const handleNextTurn = () => {
-    setShowTurnEnd(false);
     
-    // Check for winner
-    const winnerIndex = gameState.teams.findIndex((t) => checkWinner(t.position));
-    if (winnerIndex !== -1) {
-      setGameState((prev) => ({
-        ...prev,
-        phase: 'winner',
-      }));
-      return;
-    }
-    
-    // Switch to next team
-    setGameState((prev) => ({
-      ...prev,
-      phase: 'playing',
-      currentTeamIndex: prev.currentTeamIndex === 0 ? 1 : 0,
-      turnResult: null,
-      lastUnresolvedWord: null,
-    }));
     setCurrentCard(null);
     setTimeLeft(gameState.turnDuration);
   };
@@ -342,9 +355,13 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
 
         {/* Game controls area */}
         <div className="flex-1 flex flex-col items-center gap-6 max-w-lg">
-          {/* Timer and hourglass */}
+          {/* Timer and hourglass - visible during active turn */}
           {gameState.phase === 'turnActive' && (
-            <div className="flex items-center gap-8">
+            <motion.div 
+              className="flex items-center gap-6"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+            >
               <Hourglass
                 progress={timeLeft / gameState.turnDuration}
                 isRunning={isRunning && !gameState.isPaused}
@@ -355,7 +372,7 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
                 isRunning={isRunning}
                 isPaused={gameState.isPaused}
               />
-            </div>
+            </motion.div>
           )}
 
           {/* Word card or start buttons */}
@@ -365,23 +382,38 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
             >
-              <Button
-                onClick={handleStartTurn}
-                size="lg"
-                className="px-8 py-6 text-xl font-display gap-2 bg-gradient-to-r from-primary to-accent"
-              >
-                <Play className="w-6 h-6" />
-                {t('startTurn')}
-              </Button>
-              
-              <Button
-                onClick={handleStartSpecialTurn}
-                variant="outline"
-                className="gap-2"
-              >
-                <Sparkles className="w-5 h-5 text-accent" />
-                {t('startSpecialTurn')}
-              </Button>
+              {/* Show if this is a special turn position */}
+              {isCurrentPositionSpecial ? (
+                <>
+                  <div className="text-center mb-2">
+                    <div className="flex items-center justify-center gap-2 text-accent font-display text-xl">
+                      <Sparkles className="w-6 h-6" />
+                      <span>{t('specialTurnRequired')}</span>
+                      <Sparkles className="w-6 h-6" />
+                    </div>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      {t('specialTurnDescription')}
+                    </p>
+                  </div>
+                  <Button
+                    onClick={handleStartSpecialTurn}
+                    size="lg"
+                    className="px-8 py-6 text-xl font-display gap-2 bg-gradient-to-r from-accent to-primary"
+                  >
+                    <Sparkles className="w-6 h-6" />
+                    {t('startSpecialTurn')}
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  onClick={handleStartTurn}
+                  size="lg"
+                  className="px-8 py-6 text-xl font-display gap-2 bg-gradient-to-r from-primary to-accent"
+                >
+                  <Play className="w-6 h-6" />
+                  {t('startTurn')}
+                </Button>
+              )}
             </motion.div>
           )}
 
