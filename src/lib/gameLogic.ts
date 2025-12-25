@@ -33,13 +33,34 @@ export interface GameState {
   specialTurnCards: Card[];
   specialTurnResults: { teamPoints: number; opponentPoints: number };
   isPaused: boolean;
+  pendingMovement: { teamIndex: 0 | 1; movement: number; opponentBonus: boolean } | null;
 }
+
+// Special turn positions: every 7, then 6, then 5... positions
+// Starting from 0: 7, 13 (7+6), 18 (13+5), 22 (18+4), 25 (22+3), 27 (25+2), 28 (27+1)
+// Then repeat pattern: 35, 41, 46, 50, 53, 55, 56, 63, 69...
+export const getSpecialTurnPositions = (): Set<number> => {
+  const positions = new Set<number>();
+  let current = 7;
+  let step = 7;
+  
+  while (current <= 80) {
+    positions.add(current);
+    step = Math.max(1, step - 1);
+    if (step === 1) step = 7; // Reset pattern
+    current += step;
+  }
+  
+  return positions;
+};
+
+export const SPECIAL_TURN_POSITIONS = getSpecialTurnPositions();
 
 // Generate the spiral path for 9x9 board (81 positions)
 // Starting from outer edge, spiraling inward
-export const generateSpiralPath = (): { x: number; y: number; digit: number }[] => {
+export const generateSpiralPath = (): { x: number; y: number; digit: number; isSpecial: boolean }[] => {
   const size = 9;
-  const path: { x: number; y: number; digit: number }[] = [];
+  const path: { x: number; y: number; digit: number; isSpecial: boolean }[] = [];
   
   let top = 0, bottom = size - 1, left = 0, right = size - 1;
   let posIndex = 0;
@@ -47,14 +68,24 @@ export const generateSpiralPath = (): { x: number; y: number; digit: number }[] 
   while (top <= bottom && left <= right) {
     // Right along top
     for (let i = left; i <= right; i++) {
-      path.push({ x: i, y: top, digit: posIndex % 10 });
+      path.push({ 
+        x: i, 
+        y: top, 
+        digit: posIndex % 10,
+        isSpecial: SPECIAL_TURN_POSITIONS.has(posIndex)
+      });
       posIndex++;
     }
     top++;
     
     // Down along right
     for (let i = top; i <= bottom; i++) {
-      path.push({ x: right, y: i, digit: posIndex % 10 });
+      path.push({ 
+        x: right, 
+        y: i, 
+        digit: posIndex % 10,
+        isSpecial: SPECIAL_TURN_POSITIONS.has(posIndex)
+      });
       posIndex++;
     }
     right--;
@@ -62,7 +93,12 @@ export const generateSpiralPath = (): { x: number; y: number; digit: number }[] 
     // Left along bottom
     if (top <= bottom) {
       for (let i = right; i >= left; i--) {
-        path.push({ x: i, y: bottom, digit: posIndex % 10 });
+        path.push({ 
+          x: i, 
+          y: bottom, 
+          digit: posIndex % 10,
+          isSpecial: SPECIAL_TURN_POSITIONS.has(posIndex)
+        });
         posIndex++;
       }
       bottom--;
@@ -71,7 +107,12 @@ export const generateSpiralPath = (): { x: number; y: number; digit: number }[] 
     // Up along left
     if (left <= right) {
       for (let i = bottom; i >= top; i--) {
-        path.push({ x: left, y: i, digit: posIndex % 10 });
+        path.push({ 
+          x: left, 
+          y: i, 
+          digit: posIndex % 10,
+          isSpecial: SPECIAL_TURN_POSITIONS.has(posIndex)
+        });
         posIndex++;
       }
       left++;
@@ -79,6 +120,11 @@ export const generateSpiralPath = (): { x: number; y: number; digit: number }[] 
   }
   
   return path;
+};
+
+// Check if position is a special turn position
+export const isSpecialTurnPosition = (position: number): boolean => {
+  return SPECIAL_TURN_POSITIONS.has(position);
 };
 
 // Get the digit (0-9) at a specific spiral position
@@ -154,6 +200,7 @@ export const createInitialState = (
     specialTurnCards: [],
     specialTurnResults: { teamPoints: 0, opponentPoints: 0 },
     isPaused: false,
+    pendingMovement: null,
   };
 };
 
