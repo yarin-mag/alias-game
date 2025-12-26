@@ -20,7 +20,7 @@ const App = () => (
           <Route path="/" element={<HostGameSetup />} />
           <Route path="/room" element={<HostGameSetup />} />
           <Route path="/game/:hostId?" element={<Index />} /> {/* Using Index temporarily as GameScreen isn't exported as page yet, will fix */}
-          <Route path="/controller/:hostId/:teamId?" element={<MobileController />} />
+          <Route path="/controller/:hostId" element={<MobileController />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>

@@ -1,10 +1,15 @@
 import { DataConnection, Peer } from 'peerjs';
 import { Card } from './gameLogic';
 
-// Message Types
+export interface ControllerIdentify {
+    controllerId: string;
+    requestedTeamColor?: 'blue' | 'red';
+}
+
 export type PeerMessage =
     | { type: 'SYNC_STATE'; payload: GameSyncState }
-    | { type: 'ACTION'; payload: GameAction };
+    | { type: 'ACTION'; payload: GameAction }
+    | { type: 'IDENTIFY'; payload: ControllerIdentify };
 
 export interface GameSyncState {
     currentCard: Card | null;
@@ -14,10 +19,9 @@ export interface GameSyncState {
     teamColor: 'blue' | 'red';
     teamName: string;
     isPaused: boolean;
-    // New fields for team tracking and turn control
-    activeTeamColor: 'blue' | 'red';  // Which team's turn it is
-    connectionCount: number;           // Number of connected controllers
-    canStartTurn: boolean;            // Whether this controller can start turns
+    activeTeamColor: 'blue' | 'red';
+    connectionCount: number;
+    canStartTurn: boolean;
     gamePhase: 'playing' | 'turnActive' | 'turnEnd' | 'specialTurn' | 'winner';
 }
 
@@ -27,29 +31,26 @@ export type GameAction =
     | { type: 'PAUSE' }
     | { type: 'RESUME' }
     | { type: 'WRONG' }
-    | { type: 'START_TURN' }; // New action type for turn initiation
+    | { type: 'START_TURN' };
 
-// Controller connection management interface
 export interface ControllerConnection {
-    id: string;
+    controllerId: string;
+    peerId: string;
     teamColor: 'blue' | 'red';
     connection: DataConnection;
 }
 
-// Manager Class
 export class GameConnectionManager {
+    private controllerTeamById: Map<string, 'blue' | 'red'> = new Map();
     private peer: Peer | null = null;
     private connections: DataConnection[] = [];
-    private controllerConnections: ControllerConnection[] = []; // New: track team assignments
+    private controllerConnections: ControllerConnection[] = []; 
     public myId: string = '';
 
     constructor() { }
 
-    // Initialize Peer
     async initialize(id?: string): Promise<string> {
         return new Promise((resolve, reject) => {
-            // Use public peerjs server (free)
-            // In production, you might want your own server
             const peerId = id || Math.random().toString(36).substring(2, 9);
 
             this.peer = new Peer(peerId, {
@@ -69,43 +70,66 @@ export class GameConnectionManager {
         });
     }
 
-    // Bind listener for incoming connections (Host side)
     onConnection(callback: (conn: DataConnection) => void) {
         if (!this.peer) return;
+
         this.peer.on('connection', (conn) => {
             this.connections.push(conn);
 
             conn.on('open', () => {
-                console.log('Connected to: ' + conn.peer);
-                
-                // Assign team based on connection order (first = blue, second = red)
-                const teamColor: 'blue' | 'red' = this.controllerConnections.length === 0 ? 'blue' : 'red';
-                
-                const controllerConnection: ControllerConnection = {
-                    id: conn.peer,
-                    teamColor,
-                    connection: conn
-                };
-                
-                this.controllerConnections.push(controllerConnection);
+                console.log('[host] connected peer:', conn.peer);
                 callback(conn);
             });
 
             conn.on('close', () => {
-                console.log('Connection closed: ' + conn.peer);
+                console.log('[host] connection closed:', conn.peer);
                 this.connections = this.connections.filter(c => c !== conn);
-                
-                // Remove from controller connections and reassign teams if needed
-                const removedController = this.controllerConnections.find(c => c.connection === conn);
                 this.controllerConnections = this.controllerConnections.filter(c => c.connection !== conn);
-                
-                // Reassign teams based on remaining connections
-                this.reassignTeams();
+            });
+
+            conn.on('error', (err) => {
+                console.error('[host] conn error:', err);
             });
         });
     }
 
-    // Connect to a Host (Controller side)
+    private pickBalancedTeam(): 'blue' | 'red' {
+        const blue = this.controllerConnections.filter(c => c.teamColor === 'blue').length;
+        const red = this.controllerConnections.filter(c => c.teamColor === 'red').length;
+        return blue <= red ? 'blue' : 'red';
+    }
+
+    registerOrUpdateController(args: {
+        controllerId: string;
+        peerId: string;
+        requestedTeamColor?: 'blue' | 'red';
+        connection: DataConnection;
+    }): 'blue' | 'red' {
+        const { controllerId, peerId, requestedTeamColor, connection } = args;
+
+        let team = this.controllerTeamById.get(controllerId);
+        if (!team) {
+            team = requestedTeamColor ?? this.pickBalancedTeam();
+            this.controllerTeamById.set(controllerId, team);
+        }
+        const existing = this.controllerConnections.find(c => c.controllerId === controllerId);
+        if (existing) {
+            existing.peerId = peerId;
+            existing.connection = connection;
+            existing.teamColor = team;
+        } else {
+            this.controllerConnections.push({
+                controllerId,
+                peerId,
+                connection,
+                teamColor: team,
+            });
+        }
+
+        console.log('[host] controller registered', { controllerId, peerId, team });
+        return team;
+    }
+
     connectToHost(hostId: string): Promise<DataConnection> {
         return new Promise((resolve, reject) => {
             if (!this.peer) {
@@ -126,7 +150,6 @@ export class GameConnectionManager {
         });
     }
 
-    // Send message to all (Host -> Controllers)
     broadcast(message: PeerMessage) {
         this.connections.forEach(conn => {
             if (conn.open) {
@@ -135,9 +158,7 @@ export class GameConnectionManager {
         });
     }
 
-    // Send message to specific (Controller -> Host)
     send(message: PeerMessage) {
-        // Controller usually only has 1 connection (to Host)
         this.connections.forEach(conn => {
             if (conn.open) {
                 conn.send(message);
@@ -145,7 +166,6 @@ export class GameConnectionManager {
         });
     }
 
-    // Cleanup
     destroy() {
         this.connections.forEach(c => c.close());
         this.peer?.destroy();
@@ -154,15 +174,15 @@ export class GameConnectionManager {
         this.controllerConnections = [];
     }
 
-    // New methods for team management
     getConnectionCount(): number {
         return this.controllerConnections.length;
     }
 
-    getTeamForConnection(connectionId: string): 'blue' | 'red' | null {
-        const controller = this.controllerConnections.find(c => c.id === connectionId);
+    getTeamForPeer(peerId: string): 'blue' | 'red' | null {
+        const controller = this.controllerConnections.find(c => c.peerId === peerId);
         return controller ? controller.teamColor : null;
     }
+
 
     getConnectionsForTeam(teamColor: 'blue' | 'red'): ControllerConnection[] {
         return this.controllerConnections.filter(c => c.teamColor === teamColor);
@@ -172,19 +192,6 @@ export class GameConnectionManager {
         return [...this.controllerConnections];
     }
 
-    // Reassign teams when connections drop to maintain first = blue, second = red order
-    private reassignTeams(): void {
-        // Sort connections by some stable criteria (connection ID) to ensure deterministic assignment
-        const sortedConnections = [...this.controllerConnections].sort((a, b) => a.id.localeCompare(b.id));
-        
-        // Reassign teams: first connection = blue, second = red
-        sortedConnections.forEach((controller, index) => {
-            const newTeamColor: 'blue' | 'red' = index === 0 ? 'blue' : 'red';
-            controller.teamColor = newTeamColor;
-        });
-        
-        console.log('Teams reassigned:', this.controllerConnections.map(c => ({ id: c.id, team: c.teamColor })));
-    }
 }
 
 export const peerManager = new GameConnectionManager();

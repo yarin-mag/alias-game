@@ -144,7 +144,7 @@ const SpiralBoard: React.FC<SpiralBoardProps> = ({
             left: path[team1Position].x * (cellSize + gap) + padding + (sameCell ? 4 : cellSize / 2 - 20),
             top: path[team1Position].y * (cellSize + gap) + padding - 12 + (sameCell ? 0 : 0),
           }}
-          transition={{ type: 'spring', stiffness: 200, damping: 20 }}
+          transition={{ type: 'spring', stiffness: 60, damping: 20 }}
         >
           <div className="relative">
             {/* Enhanced pawn shadow */}
@@ -177,7 +177,7 @@ const SpiralBoard: React.FC<SpiralBoardProps> = ({
             left: path[team2Position].x * (cellSize + gap) + padding + (sameCell ? cellSize - 44 : cellSize / 2 - 20),
             top: path[team2Position].y * (cellSize + gap) + padding - 12,
           }}
-          transition={{ type: 'spring', stiffness: 200, damping: 20 }}
+          transition={{ type: 'spring', stiffness: 60, damping: 20 }}
         >
           <div className="relative">
             {/* Enhanced pawn shadow */}

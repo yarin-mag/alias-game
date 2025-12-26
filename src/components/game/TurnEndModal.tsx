@@ -39,7 +39,7 @@ const TurnEndModal: React.FC<TurnEndModalProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={() => {}}>
-      <DialogContent className="max-w-md game-card" dir={isRTL ? 'rtl' : 'ltr'}>
+      <DialogContent className="max-w-md game-card [&>button]:hidden" dir={isRTL ? 'rtl' : 'ltr'}>
         <DialogHeader>
           <DialogTitle className="text-3xl font-display text-center">
             ⏰ {t('turnEnded')}

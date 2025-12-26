@@ -56,18 +56,15 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
   const currentTeam = gameState.teams[gameState.currentTeamIndex];
   const opponentTeam = gameState.teams[gameState.currentTeamIndex === 0 ? 1 : 0];
 
-  // Check if current position is a special turn position
   const isCurrentPositionSpecial = isSpecialTurnPosition(currentTeam.position);
 
-  // --- PEER JS HOST LOGIC ---
   useEffect(() => {
     if (!isHostMode || !hostId) return;
 
-    // Send team-specific state to each connected controller
     const allControllers = peerManager.getAllControllerConnections();
     allControllers.forEach(controller => {
       const controllerTeamName = controller.teamColor === 'blue' ? gameState.teams[0].name : gameState.teams[1].name;
-      
+
       controller.connection.send({
         type: 'SYNC_STATE',
         payload: {
@@ -82,10 +79,10 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
           activeTeamColor: currentTeam.color,
           connectionCount: peerManager.getConnectionCount(),
           canStartTurn: gameState.phase === 'playing' && !gameState.isPaused,
-          gamePhase: gameState.phase === 'playing' ? 'playing' : 
-                    gameState.phase === 'turnActive' ? 'turnActive' :
-                    gameState.phase === 'turnEnd' ? 'turnEnd' :
-                    gameState.phase === 'specialTurn' ? 'specialTurn' : 'winner'
+          gamePhase: gameState.phase === 'playing' ? 'playing' :
+            gameState.phase === 'turnActive' ? 'turnActive' :
+              gameState.phase === 'turnEnd' ? 'turnEnd' :
+                gameState.phase === 'specialTurn' ? 'specialTurn' : 'winner'
         }
       });
     });
@@ -94,7 +91,6 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
   // Note: Connection handlers are set up in a separate useEffect after refs are defined
   // --------------------------
 
-  // Save state on changes
   useEffect(() => {
     saveGameState(gameState);
   }, [gameState]);
@@ -153,7 +149,6 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
           movement,
           opponentBonus: false,
         },
-        // Store pending movement - don't apply yet
         pendingMovement: {
           teamIndex: prev.currentTeamIndex,
           movement,
@@ -165,18 +160,16 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
 
   const handleStartTurn = useCallback(() => {
     setGameState((prev) => {
-      if (prev.phase !== 'playing') return prev; // Only allow starting from 'playing' phase
+      if (prev.phase !== 'playing') return prev;
       const card = getNextCard(prev);
       if (!card) return prev;
-      
-      // Update local state synchronously (React will batch these)
+
       setCurrentCard(card);
       setTimeLeft(prev.turnDuration);
       setIsRunning(true);
       setTurnCorrect(0);
       setTurnSkipped(0);
-      
-      // Update game state
+
       return {
         ...prev,
         phase: 'turnActive',
@@ -208,7 +201,7 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
       allControllers.forEach(controller => {
         // Remove any existing data handlers to avoid duplicates
         controller.connection.off('data');
-        
+
         // Attach new data handler
         controller.connection.on('data', (data: any) => {
           if (data.type === 'ACTION') {
@@ -224,35 +217,55 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
 
     // Setup handler for new connections
     peerManager.onConnection((conn) => {
-      // Get the team assignment for this controller
-      const controllerTeam = peerManager.getTeamForConnection(conn.peer) || 'blue';
-      const controllerTeamName = controllerTeam === 'blue' ? gameState.teams[0].name : gameState.teams[1].name;
-      
-      // Sync immediately on new connection
-      conn.send({
-        type: 'SYNC_STATE',
-        payload: {
-          currentCard,
-          currentWordIndex: currentCard ? getDigitAtPosition(currentTeam.position) : 0,
-          timerActive: isRunning,
-          timeLeft,
-          teamColor: controllerTeam,
-          teamName: controllerTeamName,
-          isPaused: gameState.isPaused,
-          // New fields for turn control
-          activeTeamColor: currentTeam.color,
-          connectionCount: peerManager.getConnectionCount(),
-          canStartTurn: gameState.phase === 'playing' && !gameState.isPaused,
-          gamePhase: gameState.phase === 'playing' ? 'playing' : 
-                    gameState.phase === 'turnActive' ? 'turnActive' :
-                    gameState.phase === 'turnEnd' ? 'turnEnd' :
-                    gameState.phase === 'specialTurn' ? 'specialTurn' : 'winner'
-        }
-      });
-
-      // Attach data handler for new connection
       conn.on('data', (data: any) => {
-        if (data.type === 'ACTION') {
+        if (data?.type === 'IDENTIFY') {
+          const { controllerId, requestedTeamColor } = data.payload as {
+            controllerId: string;
+            requestedTeamColor?: 'blue' | 'red';
+          };
+
+          const controllerTeam = peerManager.registerOrUpdateController({
+            controllerId,
+            peerId: conn.peer,
+            requestedTeamColor,
+            connection: conn
+          });
+
+          const controllerTeamName =
+            controllerTeam === 'blue' ? gameState.teams[0].name : gameState.teams[1].name;
+
+          conn.send({
+            type: 'SYNC_STATE',
+            payload: {
+              currentCard,
+              currentWordIndex: currentCard ? getDigitAtPosition(currentTeam.position) : 0,
+              timerActive: isRunning,
+              timeLeft,
+              teamColor: controllerTeam,
+              teamName: controllerTeamName,
+              isPaused: gameState.isPaused,
+              activeTeamColor: currentTeam.color,
+              connectionCount: peerManager.getConnectionCount(),
+              canStartTurn: gameState.phase === 'playing' && !gameState.isPaused,
+              gamePhase:
+                gameState.phase === 'playing'
+                  ? 'playing'
+                  : gameState.phase === 'turnActive'
+                    ? 'turnActive'
+                    : gameState.phase === 'turnEnd'
+                      ? 'turnEnd'
+                      : gameState.phase === 'specialTurn'
+                        ? 'specialTurn'
+                        : 'winner'
+            }
+          });
+          console.log('[host] sent SYNC_STATE to', conn.peer);
+
+          return;
+        }
+
+        // 2) Game actions (ignore until IDENTIFY happened)
+        if (data?.type === 'ACTION') {
           // Use refs to avoid stale closures
           if (data.payload === 'CORRECT') handleCorrectRef.current();
           if (data.payload === 'SKIP') handleSkipRef.current();
@@ -260,13 +273,13 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
           if (data.payload === 'START_TURN') handleStartTurnRef.current();
         }
       });
+
     });
 
-    // Setup handlers for existing connections
+
     setupExistingConnections();
   }, [isHostMode, hostId, gameState.teams, currentCard, isRunning, timeLeft, currentTeam, gameState.isPaused, gameState.phase]);
 
-  // Special Turn Handlers
   const handleStartSpecialTurn = useCallback(() => {
     const cards = getCardsForSpecialTurn(gameState, 5); // Get 5 cards for special turn
     setGameState(prev => ({
@@ -316,26 +329,15 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
 
       let newTeams = [...prev.teams] as [typeof prev.teams[0], typeof prev.teams[1]];
 
-      // Update current team
       const team1Pos = applyMovement(newTeams[currentTeamIdx].position, teamPoints);
       newTeams[currentTeamIdx] = { ...newTeams[currentTeamIdx], position: team1Pos };
 
-      // Update opponent team
       const team2Pos = applyMovement(newTeams[opponentIdx].position, opponentPoints);
       newTeams[opponentIdx] = { ...newTeams[opponentIdx], position: team2Pos };
 
-      // Check winner
       let winner: 'blue' | 'red' | null = null;
       if (checkWinner(newTeams[0].position)) winner = newTeams[0].color; // Assumption: index 0 is first team
       else if (checkWinner(newTeams[1].position)) winner = newTeams[1].color;
-      // Wait, checkWinner returns boolean. I need to map to color or team logic.
-      // If checkWinner(team.position) is true, that team won. 
-      // I will assume simple logic: if team 0 finishes, it triggers end?
-      // Actually the type of 'winner' in GameState is undefined/null in the interface shown in gameLogic (line 21... wait).
-      // Line 31: `turnResult: TurnResult | null;` 
-      // Line 30: phase 'winner'.
-      // Does GameState have a 'winner' field?
-      // No! It relies on `phase: 'winner'` and presumably checking positions to know who won.
 
       let newPhase: GameState['phase'] = prev.phase;
       if (checkWinner(newTeams[currentTeamIdx].position) || checkWinner(newTeams[opponentIdx].position)) {
@@ -353,7 +355,6 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
     });
   }, [gameState, setGameState]);
 
-  // Turn End Handlers
   const handleOpponentGuessed = useCallback((correct: boolean) => {
     if (correct) {
       playSound('correct');
@@ -384,11 +385,9 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
       const currentTeamIdx = prev.pendingMovement.teamIndex;
       let newTeams = [...prev.teams] as [typeof prev.teams[0], typeof prev.teams[1]];
 
-      // Apply main movement
       const newPos = applyMovement(newTeams[currentTeamIdx].position, prev.pendingMovement.movement);
       newTeams[currentTeamIdx] = { ...newTeams[currentTeamIdx], position: newPos };
 
-      // Apply opponent bonus
       if (prev.pendingMovement.opponentBonus) {
         const opponentIdx = currentTeamIdx === 0 ? 1 : 0;
         const oppPos = applyMovement(newTeams[opponentIdx].position, 1);
@@ -396,7 +395,6 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
       }
 
       let newPhase: GameState['phase'] = 'playing';
-      // Check winner
       if (checkWinner(newTeams[0].position) || checkWinner(newTeams[1].position)) {
         newPhase = 'winner';
       }
@@ -404,8 +402,7 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
       return {
         ...prev,
         teams: newTeams,
-        phase: newPhase, // 'winner' or 'playing'
-        // Switch team if not winner
+        phase: newPhase,
         currentTeamIndex: newPhase === 'winner' ? prev.currentTeamIndex : (currentTeamIdx === 0 ? 1 : 0) as 0 | 1,
         turnResult: null,
         pendingMovement: null
@@ -437,7 +434,6 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
     return () => clearInterval(interval);
   }, [isRunning, gameState.isPaused, timeLeft, handleTimeEnd]);
 
-  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Enter' && gameState.phase === 'turnActive' && !gameState.isPaused) {
@@ -458,13 +454,6 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [gameState.phase, gameState.isPaused, currentCard, handleCorrect, handleSkip, handlePauseToggle]);
-
-
-  // ... (Rest of the file)
-
-  // Wait, I need to fit this into the existing code with `replace_file_content`.
-  // The tool requires matching context. 
-  // I will replace the top of the component and the handlers.
 
   return (
     <div
@@ -599,7 +588,7 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
                       {t('controllerActiveMessage')}
                     </p>
                   </div>
-                  
+
                   {/* Pause/Resume Button for Host */}
                   <Button
                     onClick={handlePauseToggle}

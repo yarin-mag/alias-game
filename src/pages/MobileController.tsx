@@ -4,6 +4,22 @@ import { peerManager, GameSyncState } from '@/lib/peerLogic';
 import { motion, AnimatePresence, useMotionValue, useTransform, useSpring } from 'framer-motion';
 import { Check, X, Pause, Play, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { DataConnection } from 'peerjs';
+
+function getOrCreateControllerId(): string {
+    const key = 'controllerId';
+    const existing = sessionStorage.getItem(key);
+    if (existing) return existing;
+  
+    const created =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  
+    sessionStorage.setItem(key, created);
+    return created;
+  }
+  
 
 // Helper function to determine if the controller should show the card
 const shouldShowCard = (gameState: GameSyncState): boolean => {
@@ -20,7 +36,7 @@ const shouldShowCard = (gameState: GameSyncState): boolean => {
     // Two controllers scenario - only show to active team
     if (gameState.connectionCount === 2) {
         return (
-            gameState.gamePhase === 'turnActive' && 
+            gameState.gamePhase === 'turnActive' &&
             gameState.timerActive &&
             gameState.teamColor === gameState.activeTeamColor
         );
@@ -58,16 +74,16 @@ const getWaitingMessage = (gameState: GameSyncState | null): string => {
 };
 
 const MobileController: React.FC = () => {
-    const { hostId } = useParams<{ hostId: string }>();
+    const { hostId, teamId } = useParams<{ hostId: string; teamId?: 'blue' | 'red' }>();
     const [status, setStatus] = useState<'connecting' | 'connected' | 'error'>('connecting');
     const [gameState, setGameState] = useState<GameSyncState | null>(null);
-    
+
     // Swipe gesture state
     const x = useMotionValue(0);
     const rotate = useTransform(x, [-300, 300], [-30, 30]);
     // Keep card visible during swipe, only fade slightly at extremes
     const opacity = useTransform(x, [-400, -200, 0, 200, 400], [0.7, 0.9, 1, 0.9, 0.7]);
-    
+
     // Background hint opacities
     const hintOpacity = useTransform(x, [-400, -50, 0, 50, 400], [0, 0.3, 0, 0.3, 0]);
     const skipHintOpacity = useTransform(x, [-400, -150, 0], [1, 0.6, 0]);
@@ -77,7 +93,7 @@ const MobileController: React.FC = () => {
         [-300, 0, 300],
         ['rgba(239, 68, 68, 0.1)', 'transparent', 'rgba(34, 197, 94, 0.1)']
     );
-    
+
     // Spring animation for smooth movement
     const springConfig = { damping: 20, stiffness: 300 };
     const xSpring = useSpring(x, springConfig);
@@ -85,21 +101,37 @@ const MobileController: React.FC = () => {
     useEffect(() => {
         if (!hostId) return;
 
+        let cancelled = false;
+        let conn: any = null;
+
         const init = async () => {
             try {
-                // Init with random ID for controller
                 await peerManager.initialize();
-                const conn = await peerManager.connectToHost(hostId);
+                if (cancelled) return;
+
+                conn = await peerManager.connectToHost(hostId);
+                const controllerId = getOrCreateControllerId();
+                const requestedTeamColor = teamId;
+                console.log('[controller] sending IDENTIFY', { controllerId, requestedTeamColor });
+
+                conn.send({
+                    type: 'IDENTIFY',
+                    payload: { controllerId, requestedTeamColor }
+                });
+                if (cancelled) return;
 
                 setStatus('connected');
 
                 conn.on('data', (data: any) => {
-                    if (data.type === 'SYNC_STATE') {
-                        setGameState(data.payload);
+                    console.log('[controller] received', data?.type, data);
+                    if (data?.type === 'SYNC_STATE') {
+                      setGameState(data.payload);
                     }
-                });
-
+                  });
             } catch (err) {
+                // ignore errors caused by the StrictMode "fake unmount"
+                if (cancelled) return;
+
                 console.error(err);
                 setStatus('error');
             }
@@ -108,9 +140,12 @@ const MobileController: React.FC = () => {
         init();
 
         return () => {
+            cancelled = true;
+            try { conn?.close(); } catch { }
             peerManager.destroy();
         };
     }, [hostId]);
+
 
     const sendAction = (type: 'CORRECT' | 'SKIP' | 'PAUSE' | 'RESUME' | 'START_TURN') => {
         peerManager.send({ type: 'ACTION', payload: type as any });
@@ -123,7 +158,7 @@ const MobileController: React.FC = () => {
     const handleDragEnd = (event: any, info: any) => {
         const threshold = 100; // Minimum distance to trigger action
         const velocity = info.velocity.x;
-        
+
         // Check if dragged far enough or fast enough
         if (Math.abs(info.offset.x) > threshold || Math.abs(velocity) > 500) {
             if (info.offset.x > 0 || velocity > 0) {
@@ -142,7 +177,7 @@ const MobileController: React.FC = () => {
                 }
             }
         }
-        
+
         // Immediately reset position - stop any animations first
         x.stop();
         x.set(0);
@@ -151,7 +186,7 @@ const MobileController: React.FC = () => {
     // Reset x position when word changes - ensure it's always centered
     // Use a ref to track the previous word index to detect changes
     const prevWordIndexRef = useRef<number | undefined>(undefined);
-    
+
     useEffect(() => {
         const currentWordIndex = gameState?.currentWordIndex;
         if (currentWordIndex !== undefined && currentWordIndex !== prevWordIndexRef.current) {
@@ -200,27 +235,27 @@ const MobileController: React.FC = () => {
             <div className="flex-1 p-6 flex flex-col justify-center items-center relative overflow-hidden">
 
                 {/* Start Turn Button - Show when controller can start turn */}
-                {gameState?.gamePhase === 'playing' && 
-                 gameState?.teamColor === gameState?.activeTeamColor && 
-                 !gameState?.isPaused && (
-                    <motion.div
-                        initial={{ scale: 0.8, opacity: 0 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        className="text-center w-full mb-8"
-                    >
-                        <Button
-                            onClick={() => sendAction('START_TURN')}
-                            size="lg"
-                            className="px-8 py-6 text-xl font-bold bg-gradient-to-r from-primary to-accent gap-2"
+                {gameState?.gamePhase === 'playing' &&
+                    gameState?.teamColor === gameState?.activeTeamColor &&
+                    !gameState?.isPaused && (
+                        <motion.div
+                            initial={{ scale: 0.8, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            className="text-center w-full mb-8"
                         >
-                            <Play className="w-6 h-6" />
-                            Start Turn
-                        </Button>
-                        <p className="text-muted-foreground text-sm mt-2">
-                            Tap to begin your team's turn
-                        </p>
-                    </motion.div>
-                )}
+                            <Button
+                                onClick={() => sendAction('START_TURN')}
+                                size="lg"
+                                className="px-8 py-6 text-xl font-bold bg-gradient-to-r from-primary to-accent gap-2"
+                            >
+                                <Play className="w-6 h-6" />
+                                Start Turn
+                            </Button>
+                            <p className="text-muted-foreground text-sm mt-2">
+                                Tap to begin your team's turn
+                            </p>
+                        </motion.div>
+                    )}
 
                 {/* Current Word Display with Swipe Gestures */}
                 <AnimatePresence mode="wait">
@@ -263,9 +298,9 @@ const MobileController: React.FC = () => {
                                 dragMomentum={false}
                                 whileDrag={{ cursor: 'grabbing', scale: 1.05 }}
                                 initial={{ scale: 0.8, opacity: 0, y: 20 }}
-                                animate={{ 
-                                    scale: 1, 
-                                    opacity: 1, 
+                                animate={{
+                                    scale: 1,
+                                    opacity: 1,
                                     y: 0
                                 }}
                                 onAnimationStart={() => {
@@ -277,16 +312,16 @@ const MobileController: React.FC = () => {
                                 exit={{ scale: 1.1, opacity: 0, y: -20 }}
                                 className="text-center w-full relative z-10 touch-none select-none"
                             >
-                                <motion.div 
+                                <motion.div
                                     className="text-5xl font-black mb-2 tracking-tight text-foreground px-4 py-8 rounded-2xl"
                                     style={{ backgroundColor }}
                                 >
                                     {gameState.currentCard.words[gameState.currentWordIndex]}
                                 </motion.div>
-                                {/* Next Word Preview (Small) */}
+                                {/* Next Word Preview (Small)
                                 <div className="text-muted-foreground/40 text-sm mt-8">
                                     Next: {gameState.currentCard.words[gameState.currentWordIndex + 1] || 'Finish'}
-                                </div>
+                                </div> */}
                                 {/* Swipe hint */}
                                 <div className="text-muted-foreground/60 text-xs mt-4">
                                     Swipe left to skip • Swipe right for correct
