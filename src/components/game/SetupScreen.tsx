@@ -72,8 +72,8 @@ const SetupScreen: React.FC<SetupScreenProps> = ({
           </p>
         </div>
 
-        {/* Resume saved game */}
-        {savedGameExists && (
+        {/* Resume saved game - disabled for now */}
+        {/* {savedGameExists && (
           <motion.div
             className="game-card p-6 mb-6 text-center"
             initial={{ scale: 0.9 }}
@@ -90,7 +90,7 @@ const SetupScreen: React.FC<SetupScreenProps> = ({
               </Button>
             </div>
           </motion.div>
-        )}
+        )} */}
 
         {/* Setup form */}
         <div className="game-card p-6 space-y-6">
