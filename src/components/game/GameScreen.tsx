@@ -16,6 +16,7 @@ import {
   getNextCard,
   getCardsForSpecialTurn,
   getCurrentWord,
+  getDigitAtPosition,
   calculateMovement,
   applyMovement,
   checkWinner,
@@ -25,7 +26,9 @@ import {
   Card,
 } from '@/lib/gameLogic';
 import { Language, useTranslation } from '@/lib/i18n';
-import { Play, Sparkles } from 'lucide-react';
+import { Play, Sparkles, Smartphone, Pause } from 'lucide-react';
+import { useParams } from 'react-router-dom';
+import { peerManager } from '@/lib/peerLogic';
 
 interface GameScreenProps {
   gameState: GameState;
@@ -34,6 +37,9 @@ interface GameScreenProps {
 }
 
 const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onReset }) => {
+  const { hostId } = useParams<{ hostId?: string }>();
+  const isHostMode = !!hostId;
+
   const t = useTranslation(gameState.language);
   const isRTL = gameState.language === 'he';
 
@@ -49,9 +55,367 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
 
   const currentTeam = gameState.teams[gameState.currentTeamIndex];
   const opponentTeam = gameState.teams[gameState.currentTeamIndex === 0 ? 1 : 0];
-  
+
   // Check if current position is a special turn position
   const isCurrentPositionSpecial = isSpecialTurnPosition(currentTeam.position);
+
+  // --- PEER JS HOST LOGIC ---
+  useEffect(() => {
+    if (!isHostMode || !hostId) return;
+
+    // Send team-specific state to each connected controller
+    const allControllers = peerManager.getAllControllerConnections();
+    allControllers.forEach(controller => {
+      const controllerTeamName = controller.teamColor === 'blue' ? gameState.teams[0].name : gameState.teams[1].name;
+      
+      controller.connection.send({
+        type: 'SYNC_STATE',
+        payload: {
+          currentCard: currentCard,
+          currentWordIndex: currentCard ? getDigitAtPosition(currentTeam.position) : 0,
+          timerActive: isRunning,
+          timeLeft: timeLeft,
+          teamColor: controller.teamColor,
+          teamName: controllerTeamName,
+          isPaused: gameState.isPaused,
+          // New fields for turn control
+          activeTeamColor: currentTeam.color,
+          connectionCount: peerManager.getConnectionCount(),
+          canStartTurn: gameState.phase === 'playing' && !gameState.isPaused,
+          gamePhase: gameState.phase === 'playing' ? 'playing' : 
+                    gameState.phase === 'turnActive' ? 'turnActive' :
+                    gameState.phase === 'turnEnd' ? 'turnEnd' :
+                    gameState.phase === 'specialTurn' ? 'specialTurn' : 'winner'
+        }
+      });
+    });
+  }, [isHostMode, hostId, currentCard, isRunning, timeLeft, currentTeam, gameState.isPaused, gameState.phase, gameState.teams]);
+
+  // Note: Connection handlers are set up in a separate useEffect after refs are defined
+  // --------------------------
+
+  // Save state on changes
+  useEffect(() => {
+    saveGameState(gameState);
+  }, [gameState]);
+
+  const handlePauseToggle = useCallback(() => {
+    setGameState((prev) => ({
+      ...prev,
+      isPaused: !prev.isPaused,
+    }));
+  }, [setGameState]);
+
+  const handleCorrect = useCallback(() => {
+    playSound('correct');
+    setTurnCorrect((prev) => prev + 1);
+    const nextCard = getNextCard(gameState);
+    if (nextCard) {
+      setCurrentCard(nextCard);
+      setGameState((prev) => ({
+        ...prev,
+        usedCardIds: [...prev.usedCardIds, nextCard.id],
+        lastUnresolvedWord: getCurrentWord(nextCard, currentTeam.position),
+      }));
+    }
+  }, [gameState, currentTeam.position, setGameState]);
+
+  const handleSkip = useCallback(() => {
+    playSound('skip');
+    setTurnSkipped((prev) => prev + 1);
+    const nextCard = getNextCard(gameState);
+    if (nextCard) {
+      setCurrentCard(nextCard);
+      setGameState((prev) => ({
+        ...prev,
+        usedCardIds: [...prev.usedCardIds, nextCard.id],
+        lastUnresolvedWord: getCurrentWord(nextCard, currentTeam.position),
+      }));
+    }
+  }, [gameState, currentTeam.position, setGameState]);
+
+  const handleTimeEnd = useCallback(() => {
+    playSound('timeEnd');
+    setIsRunning(false);
+    setShowTurnEnd(true);
+    setShowOpponentQuestion(true);
+
+    const movement = calculateMovement(turnCorrect, turnSkipped, gameState.allowNegative);
+
+    if (currentCard) {
+      setGameState((prev) => ({
+        ...prev,
+        phase: 'turnEnd',
+        lastUnresolvedWord: getCurrentWord(currentCard, currentTeam.position),
+        turnResult: {
+          correct: turnCorrect,
+          skipped: turnSkipped,
+          movement,
+          opponentBonus: false,
+        },
+        // Store pending movement - don't apply yet
+        pendingMovement: {
+          teamIndex: prev.currentTeamIndex,
+          movement,
+          opponentBonus: false,
+        },
+      }));
+    }
+  }, [currentCard, turnCorrect, turnSkipped, currentTeam.position, gameState.allowNegative, setGameState]);
+
+  const handleStartTurn = useCallback(() => {
+    setGameState((prev) => {
+      if (prev.phase !== 'playing') return prev; // Only allow starting from 'playing' phase
+      const card = getNextCard(prev);
+      if (!card) return prev;
+      
+      // Update local state synchronously (React will batch these)
+      setCurrentCard(card);
+      setTimeLeft(prev.turnDuration);
+      setIsRunning(true);
+      setTurnCorrect(0);
+      setTurnSkipped(0);
+      
+      // Update game state
+      return {
+        ...prev,
+        phase: 'turnActive',
+        usedCardIds: [...prev.usedCardIds, card.id],
+      };
+    });
+  }, [setGameState]);
+
+  // PeerJS Action Refs (to avoid stale closures in listeners)
+  const handleCorrectRef = React.useRef(handleCorrect);
+  const handleSkipRef = React.useRef(handleSkip);
+  const handlePauseRef = React.useRef(handlePauseToggle);
+  const handleStartTurnRef = React.useRef(handleStartTurn);
+
+  useEffect(() => {
+    handleCorrectRef.current = handleCorrect;
+    handleSkipRef.current = handleSkip;
+    handlePauseRef.current = handlePauseToggle;
+    handleStartTurnRef.current = handleStartTurn;
+  }, [handleCorrect, handleSkip, handlePauseToggle, handleStartTurn]);
+
+  // Setup connection handlers AFTER refs are defined
+  useEffect(() => {
+    if (!isHostMode || !hostId) return;
+
+    // Setup data handlers for all existing connections
+    const setupExistingConnections = () => {
+      const allControllers = peerManager.getAllControllerConnections();
+      allControllers.forEach(controller => {
+        // Remove any existing data handlers to avoid duplicates
+        controller.connection.off('data');
+        
+        // Attach new data handler
+        controller.connection.on('data', (data: any) => {
+          if (data.type === 'ACTION') {
+            // Use refs to avoid stale closures
+            if (data.payload === 'CORRECT') handleCorrectRef.current();
+            if (data.payload === 'SKIP') handleSkipRef.current();
+            if (data.payload === 'PAUSE' || data.payload === 'RESUME') handlePauseRef.current();
+            if (data.payload === 'START_TURN') handleStartTurnRef.current();
+          }
+        });
+      });
+    };
+
+    // Setup handler for new connections
+    peerManager.onConnection((conn) => {
+      // Get the team assignment for this controller
+      const controllerTeam = peerManager.getTeamForConnection(conn.peer) || 'blue';
+      const controllerTeamName = controllerTeam === 'blue' ? gameState.teams[0].name : gameState.teams[1].name;
+      
+      // Sync immediately on new connection
+      conn.send({
+        type: 'SYNC_STATE',
+        payload: {
+          currentCard,
+          currentWordIndex: currentCard ? getDigitAtPosition(currentTeam.position) : 0,
+          timerActive: isRunning,
+          timeLeft,
+          teamColor: controllerTeam,
+          teamName: controllerTeamName,
+          isPaused: gameState.isPaused,
+          // New fields for turn control
+          activeTeamColor: currentTeam.color,
+          connectionCount: peerManager.getConnectionCount(),
+          canStartTurn: gameState.phase === 'playing' && !gameState.isPaused,
+          gamePhase: gameState.phase === 'playing' ? 'playing' : 
+                    gameState.phase === 'turnActive' ? 'turnActive' :
+                    gameState.phase === 'turnEnd' ? 'turnEnd' :
+                    gameState.phase === 'specialTurn' ? 'specialTurn' : 'winner'
+        }
+      });
+
+      // Attach data handler for new connection
+      conn.on('data', (data: any) => {
+        if (data.type === 'ACTION') {
+          // Use refs to avoid stale closures
+          if (data.payload === 'CORRECT') handleCorrectRef.current();
+          if (data.payload === 'SKIP') handleSkipRef.current();
+          if (data.payload === 'PAUSE' || data.payload === 'RESUME') handlePauseRef.current();
+          if (data.payload === 'START_TURN') handleStartTurnRef.current();
+        }
+      });
+    });
+
+    // Setup handlers for existing connections
+    setupExistingConnections();
+  }, [isHostMode, hostId, gameState.teams, currentCard, isRunning, timeLeft, currentTeam, gameState.isPaused, gameState.phase]);
+
+  // Special Turn Handlers
+  const handleStartSpecialTurn = useCallback(() => {
+    const cards = getCardsForSpecialTurn(gameState, 5); // Get 5 cards for special turn
+    setGameState(prev => ({
+      ...prev,
+      phase: 'specialTurn',
+      specialTurnCards: cards,
+      currentCardIndex: 0,
+      specialTurnResults: {
+        teamPoints: 0,
+        opponentPoints: 0
+      }
+    }));
+  }, [gameState, setGameState]);
+
+  const handleSpecialTeamGuessed = useCallback(() => {
+    playSound('correct');
+    setGameState(prev => ({
+      ...prev,
+      currentCardIndex: prev.currentCardIndex + 1,
+      specialTurnResults: {
+        ...prev.specialTurnResults,
+        teamPoints: prev.specialTurnResults.teamPoints + 1
+      }
+    }));
+  }, [setGameState]);
+
+  const handleSpecialOpponentGuessed = useCallback(() => {
+    playSound('skip'); // Or maybe a different sound
+    setGameState(prev => ({
+      ...prev,
+      currentCardIndex: prev.currentCardIndex + 1,
+      specialTurnResults: {
+        ...prev.specialTurnResults,
+        opponentPoints: prev.specialTurnResults.opponentPoints + 1
+      }
+    }));
+  }, [setGameState]);
+
+  const handleFinishSpecialTurn = useCallback(() => {
+    // Apply points immediately for special turn
+    const teamPoints = gameState.specialTurnResults.teamPoints;
+    const opponentPoints = gameState.specialTurnResults.opponentPoints;
+
+    setGameState(prev => {
+      const currentTeamIdx = prev.currentTeamIndex;
+      const opponentIdx = currentTeamIdx === 0 ? 1 : 0;
+
+      let newTeams = [...prev.teams] as [typeof prev.teams[0], typeof prev.teams[1]];
+
+      // Update current team
+      const team1Pos = applyMovement(newTeams[currentTeamIdx].position, teamPoints);
+      newTeams[currentTeamIdx] = { ...newTeams[currentTeamIdx], position: team1Pos };
+
+      // Update opponent team
+      const team2Pos = applyMovement(newTeams[opponentIdx].position, opponentPoints);
+      newTeams[opponentIdx] = { ...newTeams[opponentIdx], position: team2Pos };
+
+      // Check winner
+      let winner: 'blue' | 'red' | null = null;
+      if (checkWinner(newTeams[0].position)) winner = newTeams[0].color; // Assumption: index 0 is first team
+      else if (checkWinner(newTeams[1].position)) winner = newTeams[1].color;
+      // Wait, checkWinner returns boolean. I need to map to color or team logic.
+      // If checkWinner(team.position) is true, that team won. 
+      // I will assume simple logic: if team 0 finishes, it triggers end?
+      // Actually the type of 'winner' in GameState is undefined/null in the interface shown in gameLogic (line 21... wait).
+      // Line 31: `turnResult: TurnResult | null;` 
+      // Line 30: phase 'winner'.
+      // Does GameState have a 'winner' field?
+      // No! It relies on `phase: 'winner'` and presumably checking positions to know who won.
+
+      let newPhase: GameState['phase'] = prev.phase;
+      if (checkWinner(newTeams[currentTeamIdx].position) || checkWinner(newTeams[opponentIdx].position)) {
+        newPhase = 'winner';
+      } else {
+        newPhase = 'playing';
+      }
+
+      return {
+        ...prev,
+        teams: newTeams,
+        phase: newPhase,
+        currentTeamIndex: newPhase === 'winner' ? prev.currentTeamIndex : opponentIdx
+      };
+    });
+  }, [gameState, setGameState]);
+
+  // Turn End Handlers
+  const handleOpponentGuessed = useCallback((correct: boolean) => {
+    if (correct) {
+      playSound('correct');
+      setGameState(prev => {
+        if (!prev.pendingMovement) return prev;
+        return {
+          ...prev,
+          turnResult: {
+            ...prev.turnResult!,
+            opponentBonus: true
+          },
+          pendingMovement: {
+            ...prev.pendingMovement,
+            opponentBonus: true
+          }
+        };
+      });
+    }
+    setShowOpponentQuestion(false);
+  }, [setGameState]);
+
+  const handleNextTurn = useCallback(() => {
+    setShowTurnEnd(false);
+
+    setGameState(prev => {
+      if (!prev.pendingMovement) return prev;
+
+      const currentTeamIdx = prev.pendingMovement.teamIndex;
+      let newTeams = [...prev.teams] as [typeof prev.teams[0], typeof prev.teams[1]];
+
+      // Apply main movement
+      const newPos = applyMovement(newTeams[currentTeamIdx].position, prev.pendingMovement.movement);
+      newTeams[currentTeamIdx] = { ...newTeams[currentTeamIdx], position: newPos };
+
+      // Apply opponent bonus
+      if (prev.pendingMovement.opponentBonus) {
+        const opponentIdx = currentTeamIdx === 0 ? 1 : 0;
+        const oppPos = applyMovement(newTeams[opponentIdx].position, 1);
+        newTeams[opponentIdx] = { ...newTeams[opponentIdx], position: oppPos };
+      }
+
+      let newPhase: GameState['phase'] = 'playing';
+      // Check winner
+      if (checkWinner(newTeams[0].position) || checkWinner(newTeams[1].position)) {
+        newPhase = 'winner';
+      }
+
+      return {
+        ...prev,
+        teams: newTeams,
+        phase: newPhase, // 'winner' or 'playing'
+        // Switch team if not winner
+        currentTeamIndex: newPhase === 'winner' ? prev.currentTeamIndex : (currentTeamIdx === 0 ? 1 : 0) as 0 | 1,
+        turnResult: null,
+        pendingMovement: null
+      };
+    });
+
+    setCurrentCard(null);
+    setTurnCorrect(0);
+    setTurnSkipped(0);
+  }, [setGameState]);
 
   // Timer effect
   useEffect(() => {
@@ -71,7 +435,7 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
       }, 1000);
     }
     return () => clearInterval(interval);
-  }, [isRunning, gameState.isPaused, timeLeft]);
+  }, [isRunning, gameState.isPaused, timeLeft, handleTimeEnd]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -93,244 +457,17 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [gameState.phase, gameState.isPaused, currentCard]);
+  }, [gameState.phase, gameState.isPaused, currentCard, handleCorrect, handleSkip, handlePauseToggle]);
 
-  // Save state on changes
-  useEffect(() => {
-    saveGameState(gameState);
-  }, [gameState]);
 
-  const handleStartTurn = () => {
-    const card = getNextCard(gameState);
-    if (card) {
-      setCurrentCard(card);
-      setGameState((prev) => ({
-        ...prev,
-        phase: 'turnActive',
-        usedCardIds: [...prev.usedCardIds, card.id],
-      }));
-      setTimeLeft(gameState.turnDuration);
-      setIsRunning(true);
-      setTurnCorrect(0);
-      setTurnSkipped(0);
-    }
-  };
+  // ... (Rest of the file)
 
-  const handleCorrect = () => {
-    if (!currentCard) return;
-    playSound('correct');
-    setTurnCorrect((prev) => prev + 1);
-    
-    // Get next card
-    const nextCard = getNextCard(gameState);
-    if (nextCard) {
-      setCurrentCard(nextCard);
-      setGameState((prev) => ({
-        ...prev,
-        usedCardIds: [...prev.usedCardIds, nextCard.id],
-        lastUnresolvedWord: getCurrentWord(nextCard, currentTeam.position),
-      }));
-    }
-  };
-
-  const handleSkip = () => {
-    if (!currentCard) return;
-    playSound('skip');
-    setTurnSkipped((prev) => prev + 1);
-    
-    // Get next card
-    const nextCard = getNextCard(gameState);
-    if (nextCard) {
-      setCurrentCard(nextCard);
-      setGameState((prev) => ({
-        ...prev,
-        usedCardIds: [...prev.usedCardIds, nextCard.id],
-        lastUnresolvedWord: getCurrentWord(nextCard, currentTeam.position),
-      }));
-    }
-  };
-
-  const handleTimeEnd = useCallback(() => {
-    playSound('timeEnd');
-    setIsRunning(false);
-    setShowTurnEnd(true);
-    setShowOpponentQuestion(true);
-    
-    const movement = calculateMovement(turnCorrect, turnSkipped, gameState.allowNegative);
-    
-    if (currentCard) {
-      setGameState((prev) => ({
-        ...prev,
-        phase: 'turnEnd',
-        lastUnresolvedWord: getCurrentWord(currentCard, currentTeam.position),
-        turnResult: {
-          correct: turnCorrect,
-          skipped: turnSkipped,
-          movement,
-          opponentBonus: false,
-        },
-        // Store pending movement - don't apply yet
-        pendingMovement: {
-          teamIndex: prev.currentTeamIndex,
-          movement,
-          opponentBonus: false,
-        },
-      }));
-    }
-  }, [currentCard, turnCorrect, turnSkipped, currentTeam.position, gameState.allowNegative]);
-
-  const handleOpponentGuessed = (guessed: boolean) => {
-    setShowOpponentQuestion(false);
-    
-    // Update pending movement with opponent bonus info
-    setGameState((prev) => ({
-      ...prev,
-      pendingMovement: prev.pendingMovement ? {
-        ...prev.pendingMovement,
-        opponentBonus: guessed,
-      } : null,
-      turnResult: prev.turnResult ? {
-        ...prev.turnResult,
-        opponentBonus: guessed,
-      } : null,
-    }));
-  };
-
-  const handleNextTurn = () => {
-    setShowTurnEnd(false);
-    
-    // Apply pending movement NOW when user clicks Next
-    setGameState((prev) => {
-      if (!prev.pendingMovement) return prev;
-      
-      const newTeams = [...prev.teams] as [typeof prev.teams[0], typeof prev.teams[1]];
-      
-      // Apply movement to current team
-      newTeams[prev.pendingMovement.teamIndex] = {
-        ...newTeams[prev.pendingMovement.teamIndex],
-        position: applyMovement(
-          newTeams[prev.pendingMovement.teamIndex].position, 
-          prev.pendingMovement.movement
-        ),
-      };
-      
-      // Apply opponent bonus if guessed
-      if (prev.pendingMovement.opponentBonus) {
-        const opponentIndex = prev.pendingMovement.teamIndex === 0 ? 1 : 0;
-        newTeams[opponentIndex] = {
-          ...newTeams[opponentIndex],
-          position: applyMovement(newTeams[opponentIndex].position, 1),
-        };
-      }
-      
-      // Check for winner
-      const winnerIndex = newTeams.findIndex((t) => checkWinner(t.position));
-      
-      return {
-        ...prev,
-        teams: newTeams,
-        phase: winnerIndex !== -1 ? 'winner' : 'playing',
-        currentTeamIndex: prev.currentTeamIndex === 0 ? 1 : 0,
-        turnResult: null,
-        lastUnresolvedWord: null,
-        pendingMovement: null,
-      };
-    });
-    
-    setCurrentCard(null);
-    setTimeLeft(gameState.turnDuration);
-  };
-
-  const handlePauseToggle = () => {
-    setGameState((prev) => ({
-      ...prev,
-      isPaused: !prev.isPaused,
-    }));
-  };
-
-  const handleStartSpecialTurn = () => {
-    const cards = getCardsForSpecialTurn(gameState, 5);
-    setGameState((prev) => ({
-      ...prev,
-      phase: 'specialTurn',
-      specialTurnCards: cards,
-      specialTurnResults: { teamPoints: 0, opponentPoints: 0 },
-      usedCardIds: [...prev.usedCardIds, ...cards.map((c) => c.id)],
-    }));
-  };
-
-  const handleSpecialTeamGuessed = () => {
-    setGameState((prev) => ({
-      ...prev,
-      specialTurnResults: {
-        ...prev.specialTurnResults,
-        teamPoints: prev.specialTurnResults.teamPoints + 1,
-      },
-      currentCardIndex: prev.currentCardIndex + 1,
-    }));
-  };
-
-  const handleSpecialOpponentGuessed = () => {
-    setGameState((prev) => ({
-      ...prev,
-      specialTurnResults: {
-        ...prev.specialTurnResults,
-        opponentPoints: prev.specialTurnResults.opponentPoints + 1,
-      },
-      currentCardIndex: prev.currentCardIndex + 1,
-    }));
-  };
-
-  const handleFinishSpecialTurn = () => {
-    const { teamPoints, opponentPoints } = gameState.specialTurnResults;
-    
-    setGameState((prev) => {
-      const newTeams = [...prev.teams] as [typeof prev.teams[0], typeof prev.teams[1]];
-      
-      // Apply movement to current team
-      newTeams[prev.currentTeamIndex] = {
-        ...newTeams[prev.currentTeamIndex],
-        position: applyMovement(newTeams[prev.currentTeamIndex].position, teamPoints),
-      };
-      
-      // Apply movement to opponent
-      const opponentIndex = prev.currentTeamIndex === 0 ? 1 : 0;
-      newTeams[opponentIndex] = {
-        ...newTeams[opponentIndex],
-        position: applyMovement(newTeams[opponentIndex].position, opponentPoints),
-      };
-      
-      // Check for winner
-      const winnerIndex = newTeams.findIndex((t) => checkWinner(t.position));
-      
-      return {
-        ...prev,
-        teams: newTeams,
-        phase: winnerIndex !== -1 ? 'winner' : 'playing',
-        currentTeamIndex: prev.currentTeamIndex === 0 ? 1 : 0,
-        specialTurnCards: [],
-        currentCardIndex: 0,
-        specialTurnResults: { teamPoints: 0, opponentPoints: 0 },
-      };
-    });
-  };
-
-  // Winner screen
-  if (gameState.phase === 'winner') {
-    const winnerIndex = gameState.teams.findIndex((t) => checkWinner(t.position));
-    const winner = gameState.teams[winnerIndex];
-    return (
-      <WinnerScreen
-        winnerName={winner.name}
-        winnerColor={winner.color}
-        language={gameState.language}
-        onPlayAgain={onReset}
-      />
-    );
-  }
+  // Wait, I need to fit this into the existing code with `replace_file_content`.
+  // The tool requires matching context. 
+  // I will replace the top of the component and the handlers.
 
   return (
-    <div 
+    <div
       className="min-h-screen bg-background p-4 flex flex-col"
       dir={isRTL ? 'rtl' : 'ltr'}
     >
@@ -355,9 +492,17 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
 
         {/* Game controls area */}
         <div className="flex-1 flex flex-col items-center gap-6 max-w-lg">
+          {/* HOST MODE INDICATOR */}
+          {isHostMode && (
+            <div className="bg-primary/10 text-primary px-4 py-2 rounded-full flex items-center gap-2 mb-2 animate-pulse">
+              <Smartphone className="w-5 h-5" />
+              <span className="font-bold">Remote Controller Active</span>
+            </div>
+          )}
+
           {/* Timer and hourglass - visible during active turn */}
           {gameState.phase === 'turnActive' && (
-            <motion.div 
+            <motion.div
               className="flex items-center gap-6"
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -376,7 +521,7 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
           )}
 
           {/* Word card or start buttons */}
-          {gameState.phase === 'playing' && (
+          {gameState.phase === 'playing' && !isHostMode && (
             <motion.div
               className="flex flex-col gap-4 items-center"
               initial={{ opacity: 0, y: 20 }}
@@ -419,24 +564,85 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
 
           {gameState.phase === 'turnActive' && currentCard && (
             <>
-              <WordCard
-                card={currentCard}
-                teamPosition={currentTeam.position}
-                language={gameState.language}
-                isHidden={isHidden}
-              />
-              
-              <GameControls
-                onCorrect={handleCorrect}
-                onSkip={handleSkip}
-                onPause={handlePauseToggle}
-                onResume={handlePauseToggle}
-                onRules={() => setShowRules(true)}
-                onToggleHide={() => setIsHidden(!isHidden)}
-                isPaused={gameState.isPaused}
-                isHidden={isHidden}
-                language={gameState.language}
-              />
+              {/* In Host Mode, hide the card so only the controller sees it */}
+              {!isHostMode && (
+                <WordCard
+                  card={currentCard}
+                  teamPosition={currentTeam.position}
+                  language={gameState.language}
+                  isHidden={isHidden}
+                />
+              )}
+
+              {!isHostMode && (
+                <GameControls
+                  onCorrect={handleCorrect}
+                  onSkip={handleSkip}
+                  onPause={handlePauseToggle}
+                  onResume={handlePauseToggle}
+                  onRules={() => setShowRules(true)}
+                  onToggleHide={() => setIsHidden(!isHidden)}
+                  isPaused={gameState.isPaused}
+                  isHidden={isHidden}
+                  language={gameState.language}
+                />
+              )}
+
+              {/* Host Mode Pause Controls */}
+              {isHostMode && (
+                <div className="flex flex-col gap-4 items-center">
+                  <div className="text-center">
+                    <h3 className="text-xl font-display mb-2">
+                      {currentTeam.name} {t('isPlaying')}
+                    </h3>
+                    <p className="text-muted-foreground">
+                      {t('controllerActiveMessage')}
+                    </p>
+                  </div>
+                  
+                  {/* Pause/Resume Button for Host */}
+                  <Button
+                    onClick={handlePauseToggle}
+                    variant="outline"
+                    className="gap-2 px-6 py-3"
+                    size="lg"
+                  >
+                    {gameState.isPaused ? (
+                      <>
+                        <Play className="w-5 h-5" />
+                        {t('resumeGame')}
+                      </>
+                    ) : (
+                      <>
+                        <Pause className="w-5 h-5" />
+                        {t('pauseGame')}
+                      </>
+                    )}
+                    <kbd className="ml-2 px-2 py-1 bg-muted rounded text-sm">P</kbd>
+                  </Button>
+
+                  {/* Pause Overlay for Host */}
+                  {gameState.isPaused && (
+                    <motion.div
+                      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                    >
+                      <div className="bg-background p-8 rounded-lg text-center">
+                        <h2 className="text-3xl font-display mb-4">{t('paused')}</h2>
+                        <Button
+                          onClick={handlePauseToggle}
+                          size="lg"
+                          className="gap-2"
+                        >
+                          <Play className="w-5 h-5" />
+                          {t('resumeGame')}
+                        </Button>
+                      </div>
+                    </motion.div>
+                  )}
+                </div>
+              )}
 
               {/* Score during turn */}
               <div className="flex gap-8 text-lg font-body">

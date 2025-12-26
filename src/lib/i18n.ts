@@ -86,6 +86,11 @@ export const translations = {
     // Board
     start: 'התחלה',
     finish: 'סיום',
+    
+    // Host mode
+    isPlaying: 'משחקים',
+    controllerActiveMessage: 'השליטה דרך הטלפון הנייד',
+    paused: 'הפסקה',
   },
   en: {
     // Game title
@@ -172,6 +177,11 @@ export const translations = {
     // Board
     start: 'Start',
     finish: 'Finish',
+    
+    // Host mode
+    isPlaying: 'is playing',
+    controllerActiveMessage: 'Control via mobile controller',
+    paused: 'PAUSED',
   },
 };
 

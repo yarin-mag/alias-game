@@ -17,27 +17,27 @@ const SpiralBoard: React.FC<SpiralBoardProps> = ({
   team2Name,
 }) => {
   const path = useMemo(() => generateSpiralPath(), []);
-  
+
   const cellSize = 42;
   const gap = 3;
   const boardSize = 9 * (cellSize + gap) + 20;
-  
+
   // Get positions on the same cell
   const sameCell = team1Position === team2Position;
 
   return (
     <div className="relative mx-auto" style={{ width: boardSize, height: boardSize + 80 }}>
       {/* Board container with 3D effect */}
-      <div 
+      <div
         className="absolute inset-0 rounded-3xl overflow-hidden"
-        style={{ 
+        style={{
           background: 'linear-gradient(145deg, hsl(var(--board-bg)), hsl(var(--muted)))',
           boxShadow: '0 20px 60px -15px rgba(0,0,0,0.3), inset 0 2px 4px rgba(255,255,255,0.1)',
           transform: 'perspective(1000px) rotateX(5deg)',
         }}
       >
         {/* Inner shadow overlay */}
-        <div 
+        <div
           className="absolute inset-0 pointer-events-none"
           style={{
             boxShadow: 'inset 0 4px 30px rgba(0,0,0,0.15)',
@@ -45,9 +45,9 @@ const SpiralBoard: React.FC<SpiralBoardProps> = ({
           }}
         />
       </div>
-      
+
       {/* Grid cells */}
-      <div 
+      <div
         className="absolute inset-0 p-[10px]"
         style={{ transform: 'perspective(1000px) rotateX(5deg)' }}
       >
@@ -59,7 +59,9 @@ const SpiralBoard: React.FC<SpiralBoardProps> = ({
           const isAhead1 = index > team1Position && index <= team1Position + 5;
           const isAhead2 = index > team2Position && index <= team2Position + 5;
           const isBehind = index < Math.min(team1Position, team2Position);
-          
+          const layer = Math.min(cell.x, cell.y, 8 - cell.x, 8 - cell.y);
+          const brightness = 1 - layer * 0.05;
+
           return (
             <motion.div
               key={index}
@@ -77,9 +79,10 @@ const SpiralBoard: React.FC<SpiralBoardProps> = ({
                 top: cell.y * (cellSize + gap) + 10,
                 width: cellSize,
                 height: cellSize,
-                boxShadow: isEnd 
-                  ? '0 0 20px 5px rgba(var(--primary), 0.3)' 
-                  : cell.isSpecial 
+                filter: `brightness(${brightness})`,
+                boxShadow: isEnd
+                  ? '0 0 20px 5px rgba(var(--primary), 0.3)'
+                  : cell.isSpecial
                     ? '0 0 10px 2px rgba(var(--accent), 0.2)'
                     : 'inset 0 1px 3px rgba(255,255,255,0.3), 0 2px 6px rgba(0,0,0,0.1)',
               }}
@@ -98,15 +101,15 @@ const SpiralBoard: React.FC<SpiralBoardProps> = ({
               {!isStart && !isEnd && !cell.isSpecial && (
                 <span className="text-muted-foreground/70 text-xs">{cell.digit}</span>
               )}
-              
+
               {/* Path indicator for upcoming cells */}
               {(isAhead1 || isAhead2) && !isEnd && (
-                <div 
+                <div
                   className="absolute inset-0 rounded-lg pointer-events-none"
                   style={{
-                    background: isAhead1 && isAhead2 
+                    background: isAhead1 && isAhead2
                       ? 'linear-gradient(135deg, rgba(var(--team-blue), 0.15), rgba(var(--team-red), 0.15))'
-                      : isAhead1 
+                      : isAhead1
                         ? 'rgba(var(--team-blue), 0.1)'
                         : 'rgba(var(--team-red), 0.1)',
                   }}
@@ -115,7 +118,7 @@ const SpiralBoard: React.FC<SpiralBoardProps> = ({
             </motion.div>
           );
         })}
-        
+
         {/* Team 1 Pawn (Blue) */}
         <motion.div
           className="absolute z-20"
@@ -128,11 +131,11 @@ const SpiralBoard: React.FC<SpiralBoardProps> = ({
         >
           <div className="relative">
             {/* Pawn shadow */}
-            <div 
+            <div
               className="absolute bottom-0 left-1/2 -translate-x-1/2 w-6 h-2 bg-black/20 rounded-full blur-sm"
             />
             {/* Pawn body */}
-            <div 
+            <div
               className="pawn-blue w-7 h-9 rounded-t-full rounded-b-lg relative"
               title={team1Name}
             >
@@ -143,7 +146,7 @@ const SpiralBoard: React.FC<SpiralBoardProps> = ({
             </div>
           </div>
         </motion.div>
-        
+
         {/* Team 2 Pawn (Red) */}
         <motion.div
           className="absolute z-20"
@@ -156,11 +159,11 @@ const SpiralBoard: React.FC<SpiralBoardProps> = ({
         >
           <div className="relative">
             {/* Pawn shadow */}
-            <div 
+            <div
               className="absolute bottom-0 left-1/2 -translate-x-1/2 w-6 h-2 bg-black/20 rounded-full blur-sm"
             />
             {/* Pawn body */}
-            <div 
+            <div
               className="pawn-red w-7 h-9 rounded-t-full rounded-b-lg relative"
               title={team2Name}
             >
@@ -172,7 +175,7 @@ const SpiralBoard: React.FC<SpiralBoardProps> = ({
           </div>
         </motion.div>
       </div>
-      
+
       {/* Legend */}
       <div className="absolute -bottom-2 left-0 right-0 flex flex-wrap justify-center gap-4 text-xs font-body">
         <div className="flex items-center gap-1.5">
