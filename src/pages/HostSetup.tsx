@@ -44,7 +44,7 @@ const HostGameSetup: React.FC = () => {
         navigate(`/game/${hostId}`);
     };
 
-    const controllerUrl = `${window.location.origin}/controller/${hostId}`;
+    const controllerUrl = `${window.location.origin}${import.meta.env.BASE_URL}#/controller/${hostId}`;
 
     return (
         <div className="min-h-screen bg-background flex flex-col items-center justify-center p-8">
@@ -90,11 +90,13 @@ const HostGameSetup: React.FC = () => {
                         {connectionCount > 0 ? `Start Game (${connectionCount} Connected)` : 'Waiting for connection...'}
                     </Button>
 
-                    <div className="text-center">
+                    {/* Disabling Play without remote (Local Mode) */}
+                    {/* <div className="text-center">
                         <Button variant="link" onClick={() => navigate('/setup')} className="text-muted-foreground">
                             Play without remote (Local Mode)
                         </Button>
-                    </div>
+                    </div> */}
+
                 </div>
 
                 {/* Right Side: QR Card */}
