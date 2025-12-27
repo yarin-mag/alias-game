@@ -24,7 +24,41 @@ const HostGameSetup: React.FC = () => {
                 // Listen for connections
                 peerManager.onConnection((conn) => {
                     setConnectionCount(prev => prev + 1);
-                });
+                  
+                    // Listen for IDENTIFY already in Setup screen
+                    conn.off('data'); // avoid duplicates if hot-reload
+                    conn.on('data', (data: any) => {
+                      if (data?.type !== 'IDENTIFY') return;
+                  
+                      const { controllerId, requestedTeamColor } = data.payload as ControllerIdentify;
+                  
+                      const team = peerManager.registerOrUpdateController({
+                        controllerId,
+                        peerId: conn.peer,
+                        requestedTeamColor,
+                        connection: conn,
+                      });
+                  
+                      // "Setup-safe" state: shows team name, but does NOT show Start Turn
+                      const setupState: GameSyncState = {
+                        currentCard: null,
+                        currentWordIndex: 0,
+                        timerActive: false,
+                        timeLeft: 0,
+                        teamColor: team,
+                        teamName: team === 'blue' ? 'Blue Team' : 'Red Team',
+                        isPaused: false,
+                        activeTeamColor: 'blue',        // irrelevant in setup
+                        connectionCount: peerManager.getConnectionCount(),
+                        canStartTurn: false,
+                        gamePhase: 'turnEnd',           // NOT 'playing' (prevents Start Turn button)
+                      };
+                  
+                      conn.send({ type: 'SYNC_STATE', payload: setupState });
+                      console.log('[host/setup] sent initial SYNC_STATE to', conn.peer, setupState);
+                    });
+                  });
+                  
 
             } catch (err) {
                 console.error("Failed to init host", err);

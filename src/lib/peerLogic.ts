@@ -75,10 +75,10 @@ export class GameConnectionManager {
 
         this.peer.on('connection', (conn) => {
             this.connections.push(conn);
+            callback(conn);
 
             conn.on('open', () => {
                 console.log('[host] connected peer:', conn.peer);
-                callback(conn);
             });
 
             conn.on('close', () => {
