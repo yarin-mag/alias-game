@@ -11,6 +11,7 @@ import RulesModal from './RulesModal';
 import TurnEndModal from './TurnEndModal';
 import SpecialTurnPanel from './SpecialTurnPanel';
 import WinnerScreen from './WinnerScreen';
+import CorrectWordsList from './CorrectWordsList';
 import {
   GameState,
   getNextCard,
@@ -65,6 +66,11 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
     allControllers.forEach(controller => {
       const controllerTeamName = controller.teamColor === 'blue' ? gameState.teams[0].name : gameState.teams[1].name;
 
+      // For special turn, send the current special turn card
+      const specialTurnCard = gameState.phase === 'specialTurn' && gameState.specialTurnCards.length > 0
+        ? gameState.specialTurnCards[gameState.currentCardIndex]
+        : null;
+
       controller.connection.send({
         type: 'SYNC_STATE',
         payload: {
@@ -82,11 +88,16 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
           gamePhase: gameState.phase === 'playing' ? 'playing' :
             gameState.phase === 'turnActive' ? 'turnActive' :
               gameState.phase === 'turnEnd' ? 'turnEnd' :
-                gameState.phase === 'specialTurn' ? 'specialTurn' : 'winner'
+                gameState.phase === 'specialTurn' ? 'specialTurn' : 'winner',
+          currentTurnCorrectWords: gameState.currentTurnCorrectWords,
+          // Special turn data
+          specialTurnCard: specialTurnCard,
+          specialTurnCardIndex: gameState.currentCardIndex,
+          specialTurnTeamPosition: currentTeam.position
         }
       });
     });
-  }, [isHostMode, hostId, currentCard, isRunning, timeLeft, currentTeam, gameState.isPaused, gameState.phase, gameState.teams]);
+  }, [isHostMode, hostId, currentCard, isRunning, timeLeft, currentTeam, gameState.isPaused, gameState.phase, gameState.teams, gameState.currentTurnCorrectWords, gameState.specialTurnCards, gameState.currentCardIndex]);
 
   // Note: Connection handlers are set up in a separate useEffect after refs are defined
   // --------------------------
@@ -107,14 +118,19 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
     setTurnCorrect((prev) => prev + 1);
     const nextCard = getNextCard(gameState);
     if (nextCard) {
+      const currentWord = getCurrentWord(currentCard!, currentTeam.position);
       setCurrentCard(nextCard);
       setGameState((prev) => ({
         ...prev,
         usedCardIds: [...prev.usedCardIds, nextCard.id],
         lastUnresolvedWord: getCurrentWord(nextCard, currentTeam.position),
+        currentTurnCorrectWords: [
+          ...prev.currentTurnCorrectWords,
+          { word: currentWord, number: prev.currentTurnCorrectWords.length + 1 }
+        ],
       }));
     }
-  }, [gameState, currentTeam.position, setGameState]);
+  }, [gameState, currentTeam.position, currentCard, setGameState]);
 
   const handleSkip = useCallback(() => {
     playSound('skip');
@@ -158,7 +174,34 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
     }
   }, [currentCard, turnCorrect, turnSkipped, currentTeam.position, gameState.allowNegative, setGameState]);
 
+  const handleStartSpecialTurn = useCallback(() => {
+    const cards = getCardsForSpecialTurn(gameState, 5); // Get 5 cards for special turn
+
+    // Stop the timer for special turn (no time limit)
+    setIsRunning(false);
+    setTimeLeft(gameState.turnDuration);
+
+    setGameState(prev => ({
+      ...prev,
+      phase: 'specialTurn',
+      specialTurnCards: cards,
+      currentCardIndex: 0,
+      specialTurnResults: {
+        teamPoints: 0,
+        opponentPoints: 0
+      }
+    }));
+  }, [gameState, setGameState]);
+
   const handleStartTurn = useCallback(() => {
+    // Check if current position is a special turn position
+    const currentTeam = gameState.teams[gameState.currentTeamIndex];
+    if (isSpecialTurnPosition(currentTeam.position)) {
+      // Start special turn instead
+      handleStartSpecialTurn();
+      return;
+    }
+
     setGameState((prev) => {
       if (prev.phase !== 'playing') return prev;
       const card = getNextCard(prev);
@@ -174,125 +217,10 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
         ...prev,
         phase: 'turnActive',
         usedCardIds: [...prev.usedCardIds, card.id],
+        currentTurnCorrectWords: [], // Clear correct words for new turn
       };
     });
-  }, [setGameState]);
-
-  // PeerJS Action Refs (to avoid stale closures in listeners)
-  const handleCorrectRef = React.useRef(handleCorrect);
-  const handleSkipRef = React.useRef(handleSkip);
-  const handlePauseRef = React.useRef(handlePauseToggle);
-  const handleStartTurnRef = React.useRef(handleStartTurn);
-
-  useEffect(() => {
-    handleCorrectRef.current = handleCorrect;
-    handleSkipRef.current = handleSkip;
-    handlePauseRef.current = handlePauseToggle;
-    handleStartTurnRef.current = handleStartTurn;
-  }, [handleCorrect, handleSkip, handlePauseToggle, handleStartTurn]);
-
-  // Setup connection handlers AFTER refs are defined
-  useEffect(() => {
-    if (!isHostMode || !hostId) return;
-
-    // Setup data handlers for all existing connections
-    const setupExistingConnections = () => {
-      const allControllers = peerManager.getAllControllerConnections();
-      allControllers.forEach(controller => {
-        // Remove any existing data handlers to avoid duplicates
-        controller.connection.off('data');
-
-        // Attach new data handler
-        controller.connection.on('data', (data: any) => {
-          if (data.type === 'ACTION') {
-            // Use refs to avoid stale closures
-            if (data.payload === 'CORRECT') handleCorrectRef.current();
-            if (data.payload === 'SKIP') handleSkipRef.current();
-            if (data.payload === 'PAUSE' || data.payload === 'RESUME') handlePauseRef.current();
-            if (data.payload === 'START_TURN') handleStartTurnRef.current();
-          }
-        });
-      });
-    };
-
-    // Setup handler for new connections
-    peerManager.onConnection((conn) => {
-      conn.on('data', (data: any) => {
-        if (data?.type === 'IDENTIFY') {
-          const { controllerId, requestedTeamColor } = data.payload as {
-            controllerId: string;
-            requestedTeamColor?: 'blue' | 'red';
-          };
-
-          const controllerTeam = peerManager.registerOrUpdateController({
-            controllerId,
-            peerId: conn.peer,
-            requestedTeamColor,
-            connection: conn
-          });
-
-          const controllerTeamName =
-            controllerTeam === 'blue' ? gameState.teams[0].name : gameState.teams[1].name;
-
-          conn.send({
-            type: 'SYNC_STATE',
-            payload: {
-              currentCard,
-              currentWordIndex: currentCard ? getDigitAtPosition(currentTeam.position) : 0,
-              timerActive: isRunning,
-              timeLeft,
-              teamColor: controllerTeam,
-              teamName: controllerTeamName,
-              isPaused: gameState.isPaused,
-              activeTeamColor: currentTeam.color,
-              connectionCount: peerManager.getConnectionCount(),
-              canStartTurn: gameState.phase === 'playing' && !gameState.isPaused,
-              gamePhase:
-                gameState.phase === 'playing'
-                  ? 'playing'
-                  : gameState.phase === 'turnActive'
-                    ? 'turnActive'
-                    : gameState.phase === 'turnEnd'
-                      ? 'turnEnd'
-                      : gameState.phase === 'specialTurn'
-                        ? 'specialTurn'
-                        : 'winner'
-            }
-          });
-          console.log('[host] sent SYNC_STATE to', conn.peer);
-
-          return;
-        }
-
-        // 2) Game actions (ignore until IDENTIFY happened)
-        if (data?.type === 'ACTION') {
-          // Use refs to avoid stale closures
-          if (data.payload === 'CORRECT') handleCorrectRef.current();
-          if (data.payload === 'SKIP') handleSkipRef.current();
-          if (data.payload === 'PAUSE' || data.payload === 'RESUME') handlePauseRef.current();
-          if (data.payload === 'START_TURN') handleStartTurnRef.current();
-        }
-      });
-
-    });
-
-
-    setupExistingConnections();
-  }, [isHostMode, hostId, gameState.teams, currentCard, isRunning, timeLeft, currentTeam, gameState.isPaused, gameState.phase]);
-
-  const handleStartSpecialTurn = useCallback(() => {
-    const cards = getCardsForSpecialTurn(gameState, 5); // Get 5 cards for special turn
-    setGameState(prev => ({
-      ...prev,
-      phase: 'specialTurn',
-      specialTurnCards: cards,
-      currentCardIndex: 0,
-      specialTurnResults: {
-        teamPoints: 0,
-        opponentPoints: 0
-      }
-    }));
-  }, [gameState, setGameState]);
+  }, [setGameState, gameState.teams, gameState.currentTeamIndex, handleStartSpecialTurn]);
 
   const handleSpecialTeamGuessed = useCallback(() => {
     playSound('correct');
@@ -317,6 +245,130 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
       }
     }));
   }, [setGameState]);
+
+  // PeerJS Action Refs (to avoid stale closures in listeners)
+  const handleCorrectRef = React.useRef(handleCorrect);
+  const handleSkipRef = React.useRef(handleSkip);
+  const handlePauseRef = React.useRef(handlePauseToggle);
+  const handleStartTurnRef = React.useRef(handleStartTurn);
+  const handleSpecialTeamGuessedRef = React.useRef(handleSpecialTeamGuessed);
+  const handleSpecialOpponentGuessedRef = React.useRef(handleSpecialOpponentGuessed);
+
+  useEffect(() => {
+    handleCorrectRef.current = handleCorrect;
+    handleSkipRef.current = handleSkip;
+    handlePauseRef.current = handlePauseToggle;
+    handleStartTurnRef.current = handleStartTurn;
+    handleSpecialTeamGuessedRef.current = handleSpecialTeamGuessed;
+    handleSpecialOpponentGuessedRef.current = handleSpecialOpponentGuessed;
+  }, [handleCorrect, handleSkip, handlePauseToggle, handleStartTurn, handleSpecialTeamGuessed, handleSpecialOpponentGuessed]);
+
+  // Setup connection handlers AFTER refs are defined
+  useEffect(() => {
+    if (!isHostMode || !hostId) return;
+
+    // Setup data handlers for all existing connections
+    const setupExistingConnections = () => {
+      const allControllers = peerManager.getAllControllerConnections();
+      allControllers.forEach(controller => {
+        // Remove any existing data handlers to avoid duplicates
+        controller.connection.off('data');
+
+        // Attach new data handler
+        controller.connection.on('data', (data: any) => {
+          if (data.type === 'ACTION') {
+            // Use refs to avoid stale closures
+            if (data.payload === 'CORRECT') handleCorrectRef.current();
+            if (data.payload === 'SKIP') handleSkipRef.current();
+            if (data.payload === 'PAUSE' || data.payload === 'RESUME') handlePauseRef.current();
+            if (data.payload === 'START_TURN') handleStartTurnRef.current();
+            if (data.payload === 'SPECIAL_TEAM_GUESSED') handleSpecialTeamGuessedRef.current();
+            if (data.payload === 'SPECIAL_OPPONENT_GUESSED') handleSpecialOpponentGuessedRef.current();
+          }
+        });
+      });
+    };
+
+    // Setup handler for new connections
+    peerManager.onConnection((conn) => {
+      conn.on('data', (data: any) => {
+        if (data?.type === 'IDENTIFY') {
+          const { controllerId, requestedTeamColor } = data.payload as {
+            controllerId: string;
+            requestedTeamColor?: 'blue' | 'red';
+          };
+
+          const controllerTeam = peerManager.registerOrUpdateController({
+            controllerId,
+            peerId: conn.peer,
+            requestedTeamColor,
+            connection: conn
+          });
+
+          const controllerTeamName =
+            controllerTeam === 'blue' ? gameState.teams[0].name : gameState.teams[1].name;
+
+          // For special turn, send the current special turn card
+          const specialTurnCard = gameState.phase === 'specialTurn' && gameState.specialTurnCards.length > 0
+            ? gameState.specialTurnCards[gameState.currentCardIndex]
+            : null;
+
+          conn.send({
+            type: 'SYNC_STATE',
+            payload: {
+              currentCard,
+              currentWordIndex: currentCard ? getDigitAtPosition(currentTeam.position) : 0,
+              timerActive: isRunning,
+              timeLeft,
+              teamColor: controllerTeam,
+              teamName: controllerTeamName,
+              isPaused: gameState.isPaused,
+              activeTeamColor: currentTeam.color,
+              connectionCount: peerManager.getConnectionCount(),
+              canStartTurn: gameState.phase === 'playing' && !gameState.isPaused,
+              gamePhase:
+                gameState.phase === 'playing'
+                  ? 'playing'
+                  : gameState.phase === 'turnActive'
+                    ? 'turnActive'
+                    : gameState.phase === 'turnEnd'
+                      ? 'turnEnd'
+                      : gameState.phase === 'specialTurn'
+                        ? 'specialTurn'
+                        : 'winner',
+              currentTurnCorrectWords: gameState.currentTurnCorrectWords,
+              // Special turn data
+              specialTurnCard: specialTurnCard,
+              specialTurnCardIndex: gameState.currentCardIndex,
+              specialTurnTeamPosition: currentTeam.position
+            }
+          });
+          console.log('[host] sent SYNC_STATE to', conn.peer);
+
+          return;
+        }
+
+        // 2) Game actions (ignore until IDENTIFY happened)
+        if (data?.type === 'ACTION') {
+          // Use refs to avoid stale closures
+          if (data.payload === 'CORRECT') handleCorrectRef.current();
+          if (data.payload === 'SKIP') handleSkipRef.current();
+          if (data.payload === 'PAUSE' || data.payload === 'RESUME') handlePauseRef.current();
+          if (data.payload === 'START_TURN') handleStartTurnRef.current();
+          if (data.payload === 'SPECIAL_TEAM_GUESSED') handleSpecialTeamGuessedRef.current();
+          if (data.payload === 'SPECIAL_OPPONENT_GUESSED') handleSpecialOpponentGuessedRef.current();
+        }
+      });
+
+    });
+
+
+    setupExistingConnections();
+  }, [isHostMode, hostId, gameState.teams, currentCard, isRunning, timeLeft, currentTeam, gameState.isPaused, gameState.phase]);
+
+
+
+
 
   const handleFinishSpecialTurn = useCallback(() => {
     // Apply points immediately for special turn
@@ -469,14 +521,27 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
 
       {/* Main game area */}
       <div className="flex-1 flex flex-col lg:flex-row gap-6 mt-6 items-center justify-center">
-        {/* Board */}
-        <div className="flex-shrink-0">
-          <SpiralBoard
-            team1Position={gameState.teams[0].position}
-            team2Position={gameState.teams[1].position}
-            team1Name={gameState.teams[0].name}
-            team2Name={gameState.teams[1].name}
-          />
+        {/* Board and Correct Words */}
+        <div className="flex flex-col lg:flex-row gap-4 items-start">
+          {/* Board */}
+          <div className="flex-shrink-0">
+            <SpiralBoard
+              team1Position={gameState.teams[0].position}
+              team2Position={gameState.teams[1].position}
+              team1Name={gameState.teams[0].name}
+              team2Name={gameState.teams[1].name}
+            />
+          </div>
+
+          {/* Correct Words List */}
+          {gameState.currentTurnCorrectWords.length > 0 && (
+            <div className="flex-shrink-0">
+              <CorrectWordsList
+                words={gameState.currentTurnCorrectWords}
+                language={gameState.language}
+              />
+            </div>
+          )}
         </div>
 
         {/* Game controls area */}
@@ -489,7 +554,7 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
             </div>
           )}
 
-          {/* Timer and hourglass - visible during active turn */}
+          {/* Timer and hourglass - visible during active turn (but NOT special turn) */}
           {gameState.phase === 'turnActive' && (
             <motion.div
               className="flex items-center gap-6"
@@ -652,6 +717,7 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
               onTeamGuessed={handleSpecialTeamGuessed}
               onOpponentGuessed={handleSpecialOpponentGuessed}
               onFinish={handleFinishSpecialTurn}
+              isHostMode={isHostMode}
             />
           )}
         </div>

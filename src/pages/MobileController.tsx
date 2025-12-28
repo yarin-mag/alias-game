@@ -10,19 +10,24 @@ function getOrCreateControllerId(): string {
     const key = 'controllerId';
     const existing = sessionStorage.getItem(key);
     if (existing) return existing;
-  
+
     const created =
-      typeof crypto !== 'undefined' && 'randomUUID' in crypto
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
     sessionStorage.setItem(key, created);
     return created;
-  }
-  
+}
+
 
 // Helper function to determine if the controller should show the card
 const shouldShowCard = (gameState: GameSyncState): boolean => {
+    // Special turn - always show the card to controllers
+    if (gameState.gamePhase === 'specialTurn' && gameState.specialTurnCard) {
+        return true;
+    }
+
     // If no current card, don't show anything
     if (!gameState.currentCard) {
         return false;
@@ -125,9 +130,9 @@ const MobileController: React.FC = () => {
                 conn.on('data', (data: any) => {
                     console.log('[controller] received', data?.type, data);
                     if (data?.type === 'SYNC_STATE') {
-                      setGameState(data.payload);
+                        setGameState(data.payload);
                     }
-                  });
+                });
             } catch (err) {
                 // ignore errors caused by the StrictMode "fake unmount"
                 if (cancelled) return;
@@ -147,7 +152,7 @@ const MobileController: React.FC = () => {
     }, [hostId]);
 
 
-    const sendAction = (type: 'CORRECT' | 'SKIP' | 'PAUSE' | 'RESUME' | 'START_TURN') => {
+    const sendAction = (type: 'CORRECT' | 'SKIP' | 'PAUSE' | 'RESUME' | 'START_TURN' | 'SPECIAL_TEAM_GUESSED' | 'SPECIAL_OPPONENT_GUESSED') => {
         peerManager.send({ type: 'ACTION', payload: type as any });
 
         // Optimistic UI update for buttons
@@ -162,16 +167,28 @@ const MobileController: React.FC = () => {
         // Check if dragged far enough or fast enough
         if (Math.abs(info.offset.x) > threshold || Math.abs(velocity) > 500) {
             if (info.offset.x > 0 || velocity > 0) {
-                // Swiped right - CORRECT
+                // Swiped right
                 if (gameState && shouldShowCard(gameState) && !gameState.isPaused) {
-                    sendAction('CORRECT');
+                    // Special turn: team guessed correctly
+                    if (gameState.gamePhase === 'specialTurn') {
+                        sendAction('SPECIAL_TEAM_GUESSED');
+                    } else {
+                        // Normal turn: correct
+                        sendAction('CORRECT');
+                    }
                     // Vibrate for feedback
                     if (navigator.vibrate) navigator.vibrate(100);
                 }
             } else {
-                // Swiped left - SKIP
+                // Swiped left
                 if (gameState && shouldShowCard(gameState) && !gameState.isPaused) {
-                    sendAction('SKIP');
+                    // Special turn: opponent guessed correctly
+                    if (gameState.gamePhase === 'specialTurn') {
+                        sendAction('SPECIAL_OPPONENT_GUESSED');
+                    } else {
+                        // Normal turn: skip
+                        sendAction('SKIP');
+                    }
                     // Vibrate for feedback
                     if (navigator.vibrate) navigator.vibrate(100);
                 }
@@ -259,7 +276,7 @@ const MobileController: React.FC = () => {
 
                 {/* Current Word Display with Swipe Gestures */}
                 <AnimatePresence mode="wait">
-                    {gameState?.currentCard && shouldShowCard(gameState) ? (
+                    {(gameState?.currentCard && shouldShowCard(gameState)) || (gameState?.gamePhase === 'specialTurn' && gameState?.specialTurnCard) ? (
                         <div className="relative w-full flex items-center justify-center" style={{ perspective: 1000 }}>
                             {/* Background hints for swipe direction */}
                             <motion.div
@@ -284,7 +301,9 @@ const MobileController: React.FC = () => {
 
                             {/* Swipeable Word Card */}
                             <motion.div
-                                key={`word-${gameState.currentCard.id}-${gameState.currentWordIndex}`}
+                                key={gameState.gamePhase === 'specialTurn'
+                                    ? `special-${gameState.specialTurnCardIndex}-${gameState.specialTurnTeamPosition ? gameState.specialTurnTeamPosition % 10 : 0}`
+                                    : `word-${gameState.currentCard?.id}-${gameState.currentWordIndex}`}
                                 drag={gameState?.isPaused ? false : "x"}
                                 dragConstraints={{ left: -400, right: 400 }}
                                 dragElastic={0.3}
@@ -316,15 +335,15 @@ const MobileController: React.FC = () => {
                                     className="text-5xl font-black mb-2 tracking-tight text-foreground px-4 py-8 rounded-2xl"
                                     style={{ backgroundColor }}
                                 >
-                                    {gameState.currentCard.words[gameState.currentWordIndex]}
+                                    {gameState.gamePhase === 'specialTurn' && gameState.specialTurnCard && gameState.specialTurnTeamPosition !== undefined
+                                        ? gameState.specialTurnCard.words[gameState.specialTurnTeamPosition % 10]
+                                        : gameState.currentCard?.words[gameState.currentWordIndex]}
                                 </motion.div>
-                                {/* Next Word Preview (Small)
-                                <div className="text-muted-foreground/40 text-sm mt-8">
-                                    Next: {gameState.currentCard.words[gameState.currentWordIndex + 1] || 'Finish'}
-                                </div> */}
                                 {/* Swipe hint */}
                                 <div className="text-muted-foreground/60 text-xs mt-4">
-                                    Swipe left to skip • Swipe right for correct
+                                    {gameState.gamePhase === 'specialTurn'
+                                        ? 'Swipe left for opponent • Swipe right for your team'
+                                        : 'Swipe left to skip • Swipe right for correct'}
                                 </div>
                             </motion.div>
                         </div>
@@ -347,20 +366,32 @@ const MobileController: React.FC = () => {
                 <Button
                     variant="outline"
                     className="h-24 text-xl font-bold border-destructive/50 text-destructive hover:bg-destructive/10 hover:text-destructive flex-col gap-2"
-                    onClick={() => sendAction('SKIP')}
+                    onClick={() => {
+                        if (gameState?.gamePhase === 'specialTurn') {
+                            sendAction('SPECIAL_OPPONENT_GUESSED');
+                        } else {
+                            sendAction('SKIP');
+                        }
+                    }}
                     disabled={!gameState || !shouldShowCard(gameState) || gameState.isPaused}
                 >
                     <X className="w-8 h-8" />
-                    SKIP
+                    {gameState?.gamePhase === 'specialTurn' ? 'OPPONENT' : 'SKIP'}
                 </Button>
 
                 <Button
                     className="h-24 text-xl font-bold bg-success hover:bg-success/90 text-success-foreground flex-col gap-2"
-                    onClick={() => sendAction('CORRECT')}
+                    onClick={() => {
+                        if (gameState?.gamePhase === 'specialTurn') {
+                            sendAction('SPECIAL_TEAM_GUESSED');
+                        } else {
+                            sendAction('CORRECT');
+                        }
+                    }}
                     disabled={!gameState || !shouldShowCard(gameState) || gameState.isPaused}
                 >
                     <Check className="w-8 h-8" />
-                    CORRECT
+                    {gameState?.gamePhase === 'specialTurn' ? 'YOUR TEAM' : 'CORRECT'}
                 </Button>
             </div>
 

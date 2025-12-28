@@ -54,10 +54,10 @@ const TurnEndModal: React.FC<TurnEndModalProps> = ({
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
             >
-              <div>
+              {/* <div>
                 <p className="text-muted-foreground font-body mb-2">{t('lastWord')}:</p>
                 <p className="text-3xl font-display font-bold text-primary">{lastWord}</p>
-              </div>
+              </div> */}
               
               <div className="pt-4 border-t border-border">
                 <p className="font-body mb-4">

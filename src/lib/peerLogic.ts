@@ -23,6 +23,11 @@ export interface GameSyncState {
     connectionCount: number;
     canStartTurn: boolean;
     gamePhase: 'playing' | 'turnActive' | 'turnEnd' | 'specialTurn' | 'winner';
+    currentTurnCorrectWords: Array<{ word: string; number: number }>;
+    // Special turn fields
+    specialTurnCard?: Card | null;
+    specialTurnCardIndex?: number;
+    specialTurnTeamPosition?: number;
 }
 
 export type GameAction =
@@ -31,7 +36,9 @@ export type GameAction =
     | { type: 'PAUSE' }
     | { type: 'RESUME' }
     | { type: 'WRONG' }
-    | { type: 'START_TURN' };
+    | { type: 'START_TURN' }
+    | { type: 'SPECIAL_TEAM_GUESSED' }
+    | { type: 'SPECIAL_OPPONENT_GUESSED' };
 
 export interface ControllerConnection {
     controllerId: string;
@@ -44,7 +51,7 @@ export class GameConnectionManager {
     private controllerTeamById: Map<string, 'blue' | 'red'> = new Map();
     private peer: Peer | null = null;
     private connections: DataConnection[] = [];
-    private controllerConnections: ControllerConnection[] = []; 
+    private controllerConnections: ControllerConnection[] = [];
     public myId: string = '';
 
     constructor() { }

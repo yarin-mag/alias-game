@@ -34,6 +34,7 @@ export interface GameState {
   specialTurnResults: { teamPoints: number; opponentPoints: number };
   isPaused: boolean;
   pendingMovement: { teamIndex: 0 | 1; movement: number; opponentBonus: boolean } | null;
+  currentTurnCorrectWords: Array<{ word: string; number: number }>;
 }
 
 // Special turn positions: every 7, then 6, then 5... positions
@@ -43,14 +44,14 @@ export const getSpecialTurnPositions = (): Set<number> => {
   const positions = new Set<number>();
   let current = 7;
   let step = 7;
-  
+
   while (current <= 80) {
     positions.add(current);
     step = Math.max(1, step - 1);
     if (step === 1) step = 7; // Reset pattern
     current += step;
   }
-  
+
   return positions;
 };
 
@@ -61,41 +62,41 @@ export const SPECIAL_TURN_POSITIONS = getSpecialTurnPositions();
 export const generateSpiralPath = (): { x: number; y: number; digit: number; isSpecial: boolean }[] => {
   const size = 9;
   const path: { x: number; y: number; digit: number; isSpecial: boolean }[] = [];
-  
+
   let top = 0, bottom = size - 1, left = 0, right = size - 1;
   let posIndex = 0;
-  
+
   while (top <= bottom && left <= right) {
     // Right along top
     for (let i = left; i <= right; i++) {
-      path.push({ 
-        x: i, 
-        y: top, 
+      path.push({
+        x: i,
+        y: top,
         digit: posIndex % 10,
         isSpecial: SPECIAL_TURN_POSITIONS.has(posIndex)
       });
       posIndex++;
     }
     top++;
-    
+
     // Down along right
     for (let i = top; i <= bottom; i++) {
-      path.push({ 
-        x: right, 
-        y: i, 
+      path.push({
+        x: right,
+        y: i,
         digit: posIndex % 10,
         isSpecial: SPECIAL_TURN_POSITIONS.has(posIndex)
       });
       posIndex++;
     }
     right--;
-    
+
     // Left along bottom
     if (top <= bottom) {
       for (let i = right; i >= left; i--) {
-        path.push({ 
-          x: i, 
-          y: bottom, 
+        path.push({
+          x: i,
+          y: bottom,
           digit: posIndex % 10,
           isSpecial: SPECIAL_TURN_POSITIONS.has(posIndex)
         });
@@ -103,13 +104,13 @@ export const generateSpiralPath = (): { x: number; y: number; digit: number; isS
       }
       bottom--;
     }
-    
+
     // Up along left
     if (left <= right) {
       for (let i = bottom; i >= top; i--) {
-        path.push({ 
-          x: left, 
-          y: i, 
+        path.push({
+          x: left,
+          y: i,
           digit: posIndex % 10,
           isSpecial: SPECIAL_TURN_POSITIONS.has(posIndex)
         });
@@ -118,7 +119,7 @@ export const generateSpiralPath = (): { x: number; y: number; digit: number; isS
       left++;
     }
   }
-  
+
   return path;
 };
 
@@ -137,7 +138,7 @@ export const generateDeck = (language: Language): Card[] => {
   const words = getWordBank(language);
   const shuffled = [...words].sort(() => Math.random() - 0.5);
   const cards: Card[] = [];
-  
+
   // Create cards with 10 words each
   for (let i = 0; i < Math.floor(shuffled.length / 10); i++) {
     cards.push({
@@ -145,7 +146,7 @@ export const generateDeck = (language: Language): Card[] => {
       words: shuffled.slice(i * 10, (i + 1) * 10),
     });
   }
-  
+
   // Shuffle cards
   return cards.sort(() => Math.random() - 0.5);
 };
@@ -201,6 +202,7 @@ export const createInitialState = (
     specialTurnResults: { teamPoints: 0, opponentPoints: 0 },
     isPaused: false,
     pendingMovement: null,
+    currentTurnCorrectWords: [],
   };
 };
 
@@ -252,10 +254,10 @@ export const playSound = (type: 'tick' | 'timeEnd' | 'correct' | 'skip'): void =
   const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
   const oscillator = audioContext.createOscillator();
   const gainNode = audioContext.createGain();
-  
+
   oscillator.connect(gainNode);
   gainNode.connect(audioContext.destination);
-  
+
   switch (type) {
     case 'tick':
       oscillator.frequency.value = 800;

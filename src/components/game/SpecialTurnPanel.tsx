@@ -15,6 +15,7 @@ interface SpecialTurnPanelProps {
   onTeamGuessed: () => void;
   onOpponentGuessed: () => void;
   onFinish: () => void;
+  isHostMode?: boolean;
 }
 
 const SpecialTurnPanel: React.FC<SpecialTurnPanelProps> = ({
@@ -27,11 +28,12 @@ const SpecialTurnPanel: React.FC<SpecialTurnPanelProps> = ({
   onTeamGuessed,
   onOpponentGuessed,
   onFinish,
+  isHostMode = false,
 }) => {
   const t = useTranslation(language);
   const isRTL = language === 'he';
   const activeDigit = getDigitAtPosition(teamPosition);
-  
+
   const isFinished = currentCardIndex >= cards.length;
   const currentCard = cards[currentCardIndex];
 
@@ -72,9 +74,9 @@ const SpecialTurnPanel: React.FC<SpecialTurnPanelProps> = ({
             key={index}
             className={`
               w-8 h-8 rounded-full flex items-center justify-center font-display font-bold
-              ${index < currentCardIndex 
-                ? 'bg-success text-success-foreground' 
-                : index === currentCardIndex 
+              ${index < currentCardIndex
+                ? 'bg-success text-success-foreground'
+                : index === currentCardIndex
                   ? 'bg-primary text-primary-foreground animate-pulse'
                   : 'bg-muted text-muted-foreground'
               }
@@ -87,38 +89,51 @@ const SpecialTurnPanel: React.FC<SpecialTurnPanelProps> = ({
 
       {!isFinished ? (
         <>
-          {/* Current word */}
-          <motion.div
-            key={currentCardIndex}
-            className="bg-primary/10 p-6 rounded-xl text-center mb-6"
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-          >
-            <p className="text-sm text-muted-foreground mb-2 font-body">
-              {t('wordNumber')} {activeDigit}
-            </p>
-            <p className="text-4xl font-display font-bold text-primary">
-              {currentCard.words[activeDigit]}
-            </p>
-          </motion.div>
+          {/* Current word - only show on controller, not on host */}
+          {!isHostMode && (
+            <>
+              <motion.div
+                key={currentCardIndex}
+                className="bg-primary/10 p-6 rounded-xl text-center mb-6"
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+              >
+                <p className="text-sm text-muted-foreground mb-2 font-body">
+                  {t('wordNumber')} {activeDigit}
+                </p>
+                <p className="text-4xl font-display font-bold text-primary">
+                  {currentCard.words[activeDigit]}
+                </p>
+              </motion.div>
 
-          {/* Action buttons */}
-          <div className="flex gap-4 justify-center">
-            <Button
-              onClick={onTeamGuessed}
-              className="btn-correct px-6 py-4"
-            >
-              <Check className="w-5 h-5 mr-2" />
-              {t('yourTeamGuessed')}
-            </Button>
-            <Button
-              onClick={onOpponentGuessed}
-              className="btn-skip px-6 py-4"
-            >
-              <X className="w-5 h-5 mr-2" />
-              {t('opponentTeamGuessed')}
-            </Button>
-          </div>
+              {/* Action buttons */}
+              <div className="flex gap-4 justify-center">
+                <Button
+                  onClick={onTeamGuessed}
+                  className="btn-correct px-6 py-4"
+                >
+                  <Check className="w-5 h-5 mr-2" />
+                  {t('yourTeamGuessed')}
+                </Button>
+                <Button
+                  onClick={onOpponentGuessed}
+                  className="btn-skip px-6 py-4"
+                >
+                  <X className="w-5 h-5 mr-2" />
+                  {t('opponentTeamGuessed')}
+                </Button>
+              </div>
+            </>
+          )}
+
+          {/* Host mode message */}
+          {isHostMode && (
+            <div className="text-center py-8">
+              <p className="text-lg text-muted-foreground font-body">
+                {t('controllerActiveMessage')}
+              </p>
+            </div>
+          )}
         </>
       ) : (
         <div className="text-center">
