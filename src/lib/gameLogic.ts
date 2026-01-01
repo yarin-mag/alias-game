@@ -33,8 +33,13 @@ export interface GameState {
   specialTurnCards: Card[];
   specialTurnResults: { teamPoints: number; opponentPoints: number };
   isPaused: boolean;
+  timeLeft: number;
+  currentCard: Card | null;
+  turnCorrect: number;
+  turnSkipped: number;
   pendingMovement: { teamIndex: 0 | 1; movement: number; opponentBonus: boolean } | null;
   currentTurnCorrectWords: Array<{ word: string; number: number }>;
+  soundEnabled: boolean;
 }
 
 // Special turn positions: every 7, then 6, then 5... positions
@@ -199,24 +204,34 @@ export const createInitialState = (
     turnResult: null,
     lastUnresolvedWord: null,
     specialTurnCards: [],
-    specialTurnResults: { teamPoints: 0, opponentPoints: 0 },
+    timeLeft: turnDuration,
     isPaused: false,
+    currentCard: null,
+    turnCorrect: 0,
+    turnSkipped: 0,
+    specialTurnResults: { teamPoints: 0, opponentPoints: 0 },
     pendingMovement: null,
     currentTurnCorrectWords: [],
+    soundEnabled: true,
   };
 };
 
 // LocalStorage key
 const STORAGE_KEY = 'alias-game-state';
 
+// LocalStorage key helper
+const getStorageKey = (hostId?: string): string => {
+  return hostId ? `${STORAGE_KEY}-${hostId}` : STORAGE_KEY;
+};
+
 // Save game state
-export const saveGameState = (state: GameState): void => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+export const saveGameState = (state: GameState, hostId?: string): void => {
+  localStorage.setItem(getStorageKey(hostId), JSON.stringify(state));
 };
 
 // Load game state
-export const loadGameState = (): GameState | null => {
-  const saved = localStorage.getItem(STORAGE_KEY);
+export const loadGameState = (hostId?: string): GameState | null => {
+  const saved = localStorage.getItem(getStorageKey(hostId));
   if (saved) {
     try {
       return JSON.parse(saved);
@@ -228,8 +243,8 @@ export const loadGameState = (): GameState | null => {
 };
 
 // Clear saved game
-export const clearSavedGame = (): void => {
-  localStorage.removeItem(STORAGE_KEY);
+export const clearSavedGame = (hostId?: string): void => {
+  localStorage.removeItem(getStorageKey(hostId));
 };
 
 // Get available card (not used yet)
@@ -245,12 +260,27 @@ export const getNextCard = (state: GameState): Card | null => {
 // Get multiple cards for special turn
 export const getCardsForSpecialTurn = (state: GameState, count: number): Card[] => {
   const availableCards = state.deck.filter(card => !state.usedCardIds.includes(card.id));
-  const shuffled = [...availableCards].sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, count);
+
+  // If we have enough available cards, use them
+  if (availableCards.length >= count) {
+    const shuffled = [...availableCards].sort(() => Math.random() - 0.5);
+    return shuffled.slice(0, count);
+  }
+
+  // If not enough available, take all remaining available and fill the rest with random cards from the deck
+  const picked = [...availableCards];
+  const remainingCount = count - picked.length;
+
+  for (let i = 0; i < remainingCount; i++) {
+    const randomCard = state.deck[Math.floor(Math.random() * state.deck.length)];
+    picked.push(randomCard);
+  }
+
+  return picked;
 };
 
 // Sound URLs (using Web Audio API for simple sounds)
-export const playSound = (type: 'tick' | 'timeEnd' | 'correct' | 'skip'): void => {
+export const playSound = (type: 'tick' | 'timeEnd' | 'correct' | 'skip', enabled: boolean = true): void => {
   const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
   const oscillator = audioContext.createOscillator();
   const gainNode = audioContext.createGain();

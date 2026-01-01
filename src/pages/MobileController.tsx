@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { DataConnection } from 'peerjs';
 
 function getOrCreateControllerId(): string {
-    const key = 'controllerId';
+    const key = 'alias-controller-id';
     const existing = sessionStorage.getItem(key);
     if (existing) return existing;
 
@@ -23,9 +23,9 @@ function getOrCreateControllerId(): string {
 
 // Helper function to determine if the controller should show the card
 const shouldShowCard = (gameState: GameSyncState): boolean => {
-    // Special turn - always show the card to controllers
+    // Special turn - show to controller if solo mode OR if it's our team's turn
     if (gameState.gamePhase === 'specialTurn' && gameState.specialTurnCard) {
-        return true;
+        return !gameState.isMultiplayer || gameState.teamColor === gameState.activeTeamColor;
     }
 
     // If no current card, don't show anything
@@ -33,13 +33,9 @@ const shouldShowCard = (gameState: GameSyncState): boolean => {
         return false;
     }
 
-    // Single controller scenario - always show card during active turns
-    if (gameState.connectionCount === 1) {
-        return gameState.gamePhase === 'turnActive' && gameState.timerActive;
-    }
-
-    // Two controllers scenario - only show to active team
-    if (gameState.connectionCount === 2) {
+    // Logic for Multiplayer Mode (Multiple devices)
+    if (gameState.isMultiplayer) {
+        // Strictly only show to the active team
         return (
             gameState.gamePhase === 'turnActive' &&
             gameState.timerActive &&
@@ -47,8 +43,9 @@ const shouldShowCard = (gameState: GameSyncState): boolean => {
         );
     }
 
-    // Default case for other scenarios
-    return gameState.timerActive && gameState.teamColor === gameState.activeTeamColor;
+    // Default Logic for Solo/Pass-the-Phone Mode (Single device)
+    // Always show card during active turns regardless of team color assignment
+    return (gameState.gamePhase === 'turnActive' || gameState.gamePhase === 'turnEnd') && gameState.timerActive;
 };
 
 // Helper function to get appropriate waiting message
@@ -59,7 +56,11 @@ const getWaitingMessage = (gameState: GameSyncState | null): string => {
 
     // If game is paused, the pause indicator will show separately
     if (gameState.isPaused) {
-        return 'Wait for your turn to start...';
+        return 'Game Paused';
+    }
+
+    if (gameState.gamePhase === 'turnEnd') {
+        return 'Turn Ended - Waiting for Host...';
     }
 
     // Single controller - generic waiting message
@@ -80,7 +81,8 @@ const getWaitingMessage = (gameState: GameSyncState | null): string => {
 
 const MobileController: React.FC = () => {
     const { hostId, teamId } = useParams<{ hostId: string; teamId?: 'blue' | 'red' }>();
-    const [status, setStatus] = useState<'connecting' | 'connected' | 'error'>('connecting');
+    const [status, setStatus] = useState<'connecting' | 'connected' | 'error' | 'rejected'>('connecting');
+    const [rejectionReason, setRejectionReason] = useState<string>('');
     const [gameState, setGameState] = useState<GameSyncState | null>(null);
 
     // Swipe gesture state
@@ -103,13 +105,20 @@ const MobileController: React.FC = () => {
     const springConfig = { damping: 20, stiffness: 300 };
     const xSpring = useSpring(x, springConfig);
 
+    const lastSeenRef = useRef<number>(Date.now());
+    const [reconnectCount, setReconnectCount] = useState(0);
+
     useEffect(() => {
         if (!hostId) return;
 
         let cancelled = false;
         let conn: any = null;
+        let watchdogInterval: any = null;
 
-        const init = async () => {
+        const connect = async () => {
+            if (cancelled) return;
+            console.log('[controller] attempting to connect to host...', { hostId });
+
             try {
                 await peerManager.initialize();
                 if (cancelled) return;
@@ -117,39 +126,69 @@ const MobileController: React.FC = () => {
                 conn = await peerManager.connectToHost(hostId);
                 const controllerId = getOrCreateControllerId();
                 const requestedTeamColor = teamId;
-                console.log('[controller] sending IDENTIFY', { controllerId, requestedTeamColor });
 
+                console.log('[controller] sending IDENTIFY', { controllerId, requestedTeamColor });
                 conn.send({
                     type: 'IDENTIFY',
                     payload: { controllerId, requestedTeamColor }
                 });
-                if (cancelled) return;
 
+                if (cancelled) return;
                 setStatus('connected');
+                lastSeenRef.current = Date.now();
 
                 conn.on('data', (data: any) => {
-                    console.log('[controller] received', data?.type, data);
+                    lastSeenRef.current = Date.now();
                     if (data?.type === 'SYNC_STATE') {
                         setGameState(data.payload);
+                    } else if (data?.type === 'CONNECTION_REJECTED') {
+                        setStatus('rejected');
+                        setRejectionReason(data.payload.reason);
+                        // Stop watchdog if rejected
+                        if (watchdogInterval) clearInterval(watchdogInterval);
+                    } else if (data?.type === 'PING') {
+                        conn.send({ type: 'PONG' });
                     }
                 });
-            } catch (err) {
-                // ignore errors caused by the StrictMode "fake unmount"
-                if (cancelled) return;
 
-                console.error(err);
-                setStatus('error');
+                conn.on('close', () => {
+                    console.warn('[controller] connection closed, triggering reconnect');
+                    if (!cancelled) setReconnectCount(c => c + 1);
+                });
+
+                conn.on('error', (err: any) => {
+                    console.error('[controller] connection error:', err);
+                    if (!cancelled) setReconnectCount(c => c + 1);
+                });
+
+            } catch (err) {
+                console.error('[controller] connect failed:', err);
+                if (!cancelled) {
+                    setStatus('error');
+                    // Retry after 3 seconds
+                    setTimeout(() => setReconnectCount(c => c + 1), 3000);
+                }
             }
         };
 
-        init();
+        connect();
+
+        // Watchdog: If we haven't seen a PING/Message for 7 seconds, reconnect
+        watchdogInterval = setInterval(() => {
+            const timeSinceLastSeen = Date.now() - lastSeenRef.current;
+            if (timeSinceLastSeen > 7000 && status === 'connected') {
+                console.warn('[controller] host silent for 7s, reconnecting...');
+                setReconnectCount(c => c + 1);
+            }
+        }, 3000);
 
         return () => {
             cancelled = true;
+            if (watchdogInterval) clearInterval(watchdogInterval);
             try { conn?.close(); } catch { }
             peerManager.destroy();
         };
-    }, [hostId]);
+    }, [hostId, reconnectCount]);
 
 
     const sendAction = (type: 'CORRECT' | 'SKIP' | 'PAUSE' | 'RESUME' | 'START_TURN' | 'SPECIAL_TEAM_GUESSED' | 'SPECIAL_OPPONENT_GUESSED') => {
@@ -236,6 +275,22 @@ const MobileController: React.FC = () => {
         );
     }
 
+    if (status === 'rejected') {
+        return (
+            <div className="min-h-screen bg-background flex flex-col items-center justify-center p-6 text-center">
+                <AlertCircle className="w-16 h-16 text-orange-500 mb-4" />
+                <h2 className="text-xl font-bold text-orange-500">Game Full</h2>
+                <p className="text-muted-foreground mt-2 mb-6">{rejectionReason || 'Maximum number of controllers reached for this session.'}</p>
+                <Button
+                    onClick={() => window.location.reload()}
+                    className="w-full max-w-xs h-12"
+                >
+                    Try Reconnect
+                </Button>
+            </div>
+        );
+    }
+
     return (
         <div className="min-h-screen bg-background flex flex-col">
             {/* Header */}
@@ -276,7 +331,7 @@ const MobileController: React.FC = () => {
 
                 {/* Current Word Display with Swipe Gestures */}
                 <AnimatePresence mode="wait">
-                    {(gameState?.currentCard && shouldShowCard(gameState)) || (gameState?.gamePhase === 'specialTurn' && gameState?.specialTurnCard) ? (
+                    {gameState && shouldShowCard(gameState) ? (
                         <div className="relative w-full flex items-center justify-center" style={{ perspective: 1000 }}>
                             {/* Background hints for swipe direction */}
                             <motion.div
@@ -407,11 +462,11 @@ const MobileController: React.FC = () => {
                     <Pause className="w-6 h-6" />
                 </Button>
             ) : (
-                <div className="absolute inset-0 bg-background/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center">
+                <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-[100] flex flex-col items-center justify-center">
                     <h2 className="text-3xl font-bold mb-8">PAUSED</h2>
                     <Button
                         size="lg"
-                        className="h-16 w-16 rounded-full"
+                        className="h-16 w-16 rounded-full shadow-xl"
                         onClick={() => sendAction('RESUME')}
                         aria-label="Resume game"
                     >

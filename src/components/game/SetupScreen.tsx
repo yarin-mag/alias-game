@@ -6,7 +6,7 @@ import { Switch } from '@/components/ui/switch';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { motion } from 'framer-motion';
 import { Language, useTranslation } from '@/lib/i18n';
-import { Gamepad2, Globe, Clock, ArrowRightLeft } from 'lucide-react';
+import { Gamepad2, Globe, Clock, ArrowRightLeft, Volume2, VolumeX } from 'lucide-react';
 import Header from '@/components/Header';
 
 interface SetupScreenProps {
@@ -15,7 +15,8 @@ interface SetupScreenProps {
     team2Name: string,
     language: Language,
     turnDuration: number,
-    allowNegative: boolean
+    allowNegative: boolean,
+    soundEnabled: boolean
   ) => void;
   savedGameExists: boolean;
   onResume: () => void;
@@ -37,6 +38,7 @@ const SetupScreen: React.FC<SetupScreenProps> = ({
   const [team2Name, setTeam2Name] = useState(t('team2Default'));
   const [turnDuration, setTurnDuration] = useState(60);
   const [allowNegative, setAllowNegative] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(true);
 
   const handleStart = () => {
     onStart(
@@ -44,7 +46,8 @@ const SetupScreen: React.FC<SetupScreenProps> = ({
       team2Name || t('team2Default'),
       language,
       turnDuration,
-      allowNegative
+      allowNegative,
+      soundEnabled
     );
   };
 
@@ -179,6 +182,18 @@ const SetupScreen: React.FC<SetupScreenProps> = ({
               <Switch
                 checked={allowNegative}
                 onCheckedChange={setAllowNegative}
+              />
+            </div>
+
+            {/* sound toggle */}
+            <div className="flex items-center justify-between p-4 bg-muted/50 rounded-xl">
+              <div className="flex items-center gap-2">
+                {soundEnabled ? <Volume2 className="w-5 h-5 text-muted-foreground" /> : <VolumeX className="w-5 h-5 text-muted-foreground" />}
+                <Label className="font-body cursor-pointer">Sound</Label>
+              </div>
+              <Switch
+                checked={soundEnabled}
+                onCheckedChange={setSoundEnabled}
               />
             </div>
 

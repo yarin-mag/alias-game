@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 import SetupScreen from '@/components/game/SetupScreen';
 import GameScreen from '@/components/game/GameScreen';
-import { 
-  GameState, 
-  createInitialState, 
-  loadGameState, 
+import {
+  GameState,
+  createInitialState,
+  loadGameState,
   clearSavedGame,
-  saveGameState 
+  saveGameState
 } from '@/lib/gameLogic';
 import { Language } from '@/lib/i18n';
 
 const Index = () => {
+  const { hostId } = useParams<{ hostId?: string }>();
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [showSetup, setShowSetup] = useState(true);
   const [language, setLanguage] = useState<Language>('he');
@@ -18,12 +20,18 @@ const Index = () => {
 
   // Check for saved game on mount
   useEffect(() => {
-    const saved = loadGameState();
+    const saved = loadGameState(hostId);
     if (saved) {
       setSavedGameExists(true);
       setLanguage(saved.language);
+
+      // If we have a hostId, auto-resume
+      if (hostId) {
+        setGameState(saved);
+        setShowSetup(false);
+      }
     }
-  }, []);
+  }, [hostId]);
 
   // Update HTML dir attribute based on language
   useEffect(() => {
@@ -36,17 +44,19 @@ const Index = () => {
     team2Name: string,
     lang: Language,
     turnDuration: number,
-    allowNegative: boolean
+    allowNegative: boolean,
+    soundEnabled: boolean
   ) => {
-    clearSavedGame();
+    clearSavedGame(hostId);
     const newState = createInitialState(team1Name, team2Name, lang, turnDuration, allowNegative);
+    newState.soundEnabled = soundEnabled; // Explicitly set it
     setGameState(newState);
     setShowSetup(false);
-    saveGameState(newState);
+    saveGameState(newState, hostId);
   };
 
   const handleResume = () => {
-    const saved = loadGameState();
+    const saved = loadGameState(hostId);
     if (saved) {
       setGameState(saved);
       setLanguage(saved.language);
@@ -55,7 +65,7 @@ const Index = () => {
   };
 
   const handleReset = () => {
-    clearSavedGame();
+    clearSavedGame(hostId);
     setGameState(null);
     setShowSetup(true);
     setSavedGameExists(false);

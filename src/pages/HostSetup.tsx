@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { peerManager } from '@/lib/peerLogic';
+import { peerManager, ControllerIdentify, GameSyncState } from '@/lib/peerLogic';
 import { QRCodeSVG as QRCode } from 'qrcode.react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -16,19 +16,26 @@ const HostGameSetup: React.FC = () => {
 
     // Initialize Host
     useEffect(() => {
+        let cleanupFunctions: Array<() => void> = [];
+
         const initHost = async () => {
             try {
-                const id = await peerManager.initialize(); // Auto-generates random ID
+                const id = await peerManager.initialize();
                 setHostId(id);
                 setIsInitializing(false);
+                setConnectionCount(peerManager.getConnectionCount());
 
-                // Listen for connections
-                peerManager.onConnection((conn) => {
-                    setConnectionCount(prev => prev + 1);
+                // Sync connection count
+                const unsubsCount = peerManager.onConnectionCountChange((count) => {
+                    setConnectionCount(count);
+                });
+                cleanupFunctions.push(unsubsCount);
 
-                    // Listen for IDENTIFY already in Setup screen
-                    conn.off('data'); // avoid duplicates if hot-reload
-                    conn.on('data', (data: any) => {
+                // Listen for new connections to attach IDENTIFY logic
+                const unsubsConn = peerManager.onConnection((conn) => {
+                    // Raw connection count is handled by the manager now
+
+                    const handleData = (data: any) => {
                         if (data?.type !== 'IDENTIFY') return;
 
                         const { controllerId, requestedTeamColor } = data.payload as ControllerIdentify;
@@ -40,6 +47,17 @@ const HostGameSetup: React.FC = () => {
                             connection: conn,
                         });
 
+                        // If registration failed (limit reached), send rejection and close connection
+                        if (team === null) {
+                            conn.send({
+                                type: 'CONNECTION_REJECTED',
+                                payload: { reason: 'Game is full. Maximum 2 controllers allowed.' }
+                            });
+                            console.log('[host/setup] rejected controller - game full', conn.peer);
+                            setTimeout(() => conn.close(), 100);
+                            return;
+                        }
+
                         // "Setup-safe" state: shows team name, but does NOT show Start Turn
                         const setupState: GameSyncState = {
                             currentCard: null,
@@ -49,17 +67,23 @@ const HostGameSetup: React.FC = () => {
                             teamColor: team,
                             teamName: team === 'blue' ? 'Blue Team' : 'Red Team',
                             isPaused: false,
-                            activeTeamColor: 'blue',        // irrelevant in setup
+                            activeTeamColor: 'blue',
                             connectionCount: peerManager.getConnectionCount(),
                             canStartTurn: false,
-                            gamePhase: 'turnEnd',           // NOT 'playing' (prevents Start Turn button)
+                            gamePhase: 'turnEnd',
+                            currentTurnCorrectWords: [],
+                            isMultiplayer: peerManager.isMultiplayer(),
                         };
 
                         conn.send({ type: 'SYNC_STATE', payload: setupState });
                         console.log('[host/setup] sent initial SYNC_STATE to', conn.peer, setupState);
-                    });
-                });
+                    };
 
+                    conn.on('data', handleData);
+                    // No easy way to remove individual 'data' listeners from PeerJS conn without the function ref,
+                    // but since this is setup screen and we'll navigate away soon, it's mostly okay.
+                });
+                cleanupFunctions.push(unsubsConn);
 
             } catch (err) {
                 console.error("Failed to init host", err);
@@ -70,8 +94,7 @@ const HostGameSetup: React.FC = () => {
         initHost();
 
         return () => {
-            // Don't destroy here! We need it for the game.
-            // We'll manage lifecycle carefully.
+            cleanupFunctions.forEach(fn => fn());
         };
     }, []);
 
