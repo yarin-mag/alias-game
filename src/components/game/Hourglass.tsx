@@ -7,164 +7,167 @@ interface HourglassProps {
 }
 
 const Hourglass: React.FC<HourglassProps> = ({ progress, isRunning }) => {
-  const topSandHeight = Math.max(0, progress * 50);
-  const bottomSandHeight = Math.max(0, (1 - progress) * 50);
+  // SVG ViewBox is 0 0 100 180
+  // Center x is 50.
+
+  // Progress calculations
+  // Top Sand: Starts full (height depends on progress)
+  const topSandHeight = progress * 85;
 
   return (
-    <div className="relative w-24 h-40 flex flex-col items-center justify-center">
-      {/* Frame - Top */}
-      <div 
-        className="absolute top-0 left-0 right-0 h-4 rounded-full z-10"
+    <div className="relative w-32 h-52 flex flex-col items-center justify-center select-none" style={{ perspective: '500px' }}>
+
+      {/* --- FRAME TOP --- */}
+      <div
+        className="absolute top-0 w-28 h-4 rounded-lg z-20 shadow-xl"
         style={{
-          background: 'linear-gradient(180deg, hsl(38 60% 45%), hsl(38 50% 30%))',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.3), inset 0 2px 4px rgba(255,255,255,0.3)',
+          background: 'linear-gradient(90deg, #5D4037, #8D6E63, #5D4037)',
+          boxShadow: '0 4px 6px rgba(0,0,0,0.4), inset 0 1px 2px rgba(255,255,255,0.3)'
         }}
       />
-      
-      {/* Frame - Bottom */}
-      <div 
-        className="absolute bottom-0 left-0 right-0 h-4 rounded-full z-10"
-        style={{
-          background: 'linear-gradient(180deg, hsl(38 50% 35%), hsl(38 60% 45%))',
-          boxShadow: '0 -2px 8px rgba(0,0,0,0.2), inset 0 -2px 4px rgba(255,255,255,0.2)',
-        }}
-      />
-      
-      {/* Glass container */}
-      <div className="relative w-20 h-36 mt-2 mb-2">
-        {/* Top bulb */}
-        <div 
-          className="absolute top-0 left-1/2 -translate-x-1/2 w-16 h-16 overflow-hidden"
-          style={{
-            clipPath: 'polygon(10% 0%, 90% 0%, 55% 100%, 45% 100%)',
-          }}
-        >
-          {/* Glass effect */}
-          <div 
-            className="absolute inset-0 rounded-t-2xl"
-            style={{
-              background: 'linear-gradient(135deg, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0.1) 50%, rgba(0,0,0,0.1) 100%)',
-              border: '2px solid rgba(255,255,255,0.3)',
-            }}
+
+      {/* --- SVG HOURGLASS --- */}
+      <svg
+        viewBox="0 0 100 180"
+        className="relative w-24 h-44 z-10 overflow-visible"
+      >
+        <defs>
+          {/* Glass Gradient */}
+          <linearGradient id="glassGradient" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="rgba(255,255,255,0.4)" />
+            <stop offset="50%" stopColor="rgba(255,255,255,0.1)" />
+            <stop offset="100%" stopColor="rgba(0,0,0,0.1)" />
+          </linearGradient>
+
+          {/* Sand Gradient */}
+          <linearGradient id="sandGradient" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#F4D03F" />
+            <stop offset="100%" stopColor="#E1C340" />
+          </linearGradient>
+
+          {/* Noise Filter for Texture */}
+          <filter id="noise">
+            <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="3" stitchTiles="stitch" />
+            <feColorMatrix type="saturate" values="0" />
+            <feComponentTransfer>
+              <feFuncA type="linear" slope="0.4" />
+            </feComponentTransfer>
+          </filter>
+
+          {/* Bulb Shapes */}
+          <path id="topBulbPath" d="M 10 2 Q 5 2 5 15 Q 12 70 48 88 Q 50 90 52 88 Q 88 70 95 15 Q 95 2 90 2 Z" />
+          <path id="bottomBulbPath" d="M 48 92 Q 50 90 52 92 Q 88 110 95 165 Q 95 178 90 178 H 10 Q 5 178 5 165 Q 12 110 48 92 Z" />
+
+          {/* Clip Paths */}
+          <clipPath id="topBulbClip">
+            <use href="#topBulbPath" />
+          </clipPath>
+          <clipPath id="bottomBulbClip">
+            <use href="#bottomBulbPath" />
+          </clipPath>
+        </defs>
+
+        {/* --- TOP BULB --- */}
+        <g clipPath="url(#topBulbClip)">
+          {/* Background */}
+          <rect width="100" height="90" fill="url(#glassGradient)" />
+
+          {/* Sand */}
+          <motion.rect
+            x="0"
+            y="0"
+            width="100"
+            height="90"
+            fill="url(#sandGradient)"
+            initial={false}
+            animate={{ y: 90 - topSandHeight }}
+            transition={{ duration: 0.5, ease: "linear" }}
           />
-          
-          {/* Sand in top */}
-          <motion.div
-            className="absolute bottom-0 left-1/2 -translate-x-1/2"
-            style={{
-              width: `${40 + progress * 40}%`,
-              background: 'linear-gradient(180deg, hsl(var(--sand-top)), hsl(var(--sand-bottom)))',
-              clipPath: 'polygon(5% 0%, 95% 0%, 75% 100%, 25% 100%)',
-              borderRadius: '4px 4px 0 0',
-            }}
-            animate={{ height: topSandHeight }}
-            transition={{ duration: 0.3 }}
+          {/* Sand Texture Overlay */}
+          <motion.rect
+            x="0"
+            y="0"
+            width="100"
+            height="90"
+            filter="url(#noise)"
+            initial={false}
+            animate={{ y: 90 - topSandHeight }}
+            transition={{ duration: 0.5, ease: "linear" }}
+            style={{ mixBlendMode: 'multiply' }}
           />
-        </div>
-        
-        {/* Neck */}
-        <div 
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-3 h-6 z-20"
-          style={{
-            background: 'linear-gradient(90deg, rgba(255,255,255,0.2), rgba(0,0,0,0.1))',
-          }}
-        >
-          {/* Falling sand stream */}
-          {isRunning && progress > 0.02 && (
-            <div 
-              className="absolute left-1/2 -translate-x-1/2 w-1 bg-gradient-to-b from-sand-top to-sand-bottom"
-              style={{ 
-                height: '100%',
-                animation: 'sandStream 0.3s linear infinite',
-              }}
+
+          {/* Inner Highlight/Shadow */}
+          <use href="#topBulbPath" fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth="2" />
+          <path d="M 15 10 Q 15 60 40 80" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="3" />
+        </g>
+
+        {/* --- STREAM --- */}
+        {isRunning && progress > 0.01 && (
+          <g>
+            <line x1="50" y1="90" x2="50" y2="180" stroke="#E1C340" strokeWidth="2" />
+            {/* Animated Stream Texture */}
+            <motion.line
+              x1="50" y1="90" x2="50" y2="180"
+              stroke="white"
+              strokeWidth="1"
+              strokeDasharray="4 4"
+              animate={{ strokeDashoffset: [0, -8] }}
+              transition={{ repeat: Infinity, duration: 0.2, ease: "linear" }}
+              opacity="0.4"
             />
-          )}
-          
-          {/* Falling sand particles */}
-          {isRunning && progress > 0.02 && (
-            <>
-              {[...Array(5)].map((_, i) => (
-                <motion.div
-                  key={i}
-                  className="absolute left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full"
-                  style={{ background: 'hsl(var(--sand-bottom))' }}
-                  initial={{ y: -4, opacity: 1, scale: 1 }}
-                  animate={{ y: 50, opacity: 0, scale: 0.5 }}
-                  transition={{
-                    duration: 0.5,
-                    repeat: Infinity,
-                    delay: i * 0.1,
-                    ease: 'linear',
-                  }}
-                />
-              ))}
-            </>
-          )}
-        </div>
-        
-        {/* Bottom bulb */}
-        <div 
-          className="absolute bottom-0 left-1/2 -translate-x-1/2 w-16 h-16 overflow-hidden"
-          style={{
-            clipPath: 'polygon(45% 0%, 55% 0%, 90% 100%, 10% 100%)',
-          }}
-        >
-          {/* Glass effect */}
-          <div 
-            className="absolute inset-0 rounded-b-2xl"
-            style={{
-              background: 'linear-gradient(135deg, rgba(255,255,255,0.3) 0%, rgba(255,255,255,0.1) 50%, rgba(0,0,0,0.15) 100%)',
-              border: '2px solid rgba(255,255,255,0.25)',
-            }}
+          </g>
+        )}
+
+        {/* --- BOTTOM BULB --- */}
+        <g clipPath="url(#bottomBulbClip)">
+          {/* Background */}
+          <rect y="90" width="100" height="90" fill="url(#glassGradient)" />
+
+          {/* Sand Pile - Growing Triangle */}
+          <motion.path
+            fill="url(#sandGradient)"
+            style={{ transformOrigin: '50% 180px' }}
+            animate={{ scale: (1 - progress) }}
+            d="M 0 178 H 100 L 50 120 Z" // Wide base triangle
+            transition={{ duration: 0.5, ease: "linear" }}
           />
-          
-          {/* Sand pile in bottom */}
-          <motion.div
-            className="absolute bottom-0 left-1/2 -translate-x-1/2"
-            style={{
-              width: `${50 + (1 - progress) * 40}%`,
-              background: 'linear-gradient(0deg, hsl(var(--sand-bottom)), hsl(var(--sand-top)))',
-              borderRadius: '0 0 50% 50%',
-            }}
-            animate={{ height: bottomSandHeight }}
-            transition={{ duration: 0.3 }}
-          >
-            {/* Sand pile peak */}
-            {isRunning && bottomSandHeight > 10 && (
-              <div 
-                className="absolute -top-2 left-1/2 -translate-x-1/2 w-0 h-0"
-                style={{
-                  borderLeft: '6px solid transparent',
-                  borderRight: '6px solid transparent',
-                  borderBottom: '8px solid hsl(var(--sand-top))',
-                }}
-              />
-            )}
-          </motion.div>
-        </div>
-        
-        {/* Glass shine effect */}
-        <div 
-          className="absolute top-4 left-3 w-1 h-8 bg-white/40 rounded-full blur-[1px]"
-          style={{ transform: 'rotate(-15deg)' }}
-        />
-        <div 
-          className="absolute bottom-4 left-3 w-1 h-8 bg-white/30 rounded-full blur-[1px]"
-          style={{ transform: 'rotate(15deg)' }}
-        />
-      </div>
-      
-      {/* Glow effect when running */}
-      {isRunning && (
-        <motion.div 
-          className="absolute inset-0 rounded-3xl pointer-events-none"
-          style={{
-            background: 'radial-gradient(ellipse at center, rgba(var(--sand-bottom), 0.15) 0%, transparent 70%)',
-          }}
-          animate={{ opacity: [0.5, 1, 0.5] }}
-          transition={{ duration: 1.5, repeat: Infinity }}
-        />
-      )}
+
+          {/* Sand Texture Overlay */}
+          <motion.path
+            fill="black"
+            filter="url(#noise)"
+            style={{ transformOrigin: '50% 180px', mixBlendMode: 'multiply', opacity: 0.3 }}
+            animate={{ scale: (1 - progress) }}
+            d="M 0 178 H 100 L 50 120 Z"
+            transition={{ duration: 0.5, ease: "linear" }}
+          />
+
+          {/* Inner Highlight */}
+          <use href="#bottomBulbPath" fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth="2" />
+          <path d="M 15 170 Q 15 120 40 100" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="3" />
+        </g>
+
+        {/* --- CONNECTOR RING --- */}
+        <rect x="46" y="88" width="8" height="4" rx="1" fill="#8D6E63" />
+
+      </svg>
+
+      {/* --- FRAME BOTTOM --- */}
+      <div
+        className="absolute bottom-0 w-28 h-4 rounded-lg z-20 shadow-xl"
+        style={{
+          background: 'linear-gradient(90deg, #5D4037, #8D6E63, #5D4037)',
+          boxShadow: '0 -4px 6px rgba(0,0,0,0.4), inset 0 1px 2px rgba(255,255,255,0.3)'
+        }}
+      />
+
+      {/* FRAME RODS */}
+      <div className="absolute top-2 bottom-2 left-1 w-1.5 bg-gradient-to-r from-amber-800 to-amber-600 rounded-full shadow-inner" />
+      <div className="absolute top-2 bottom-2 right-1 w-1.5 bg-gradient-to-r from-amber-800 to-amber-600 rounded-full shadow-inner" />
+
+      {/* Rod highlights */}
+      <div className="absolute top-4 left-1.5 w-0.5 h-44 bg-white/20 blur-[0.5px]" />
+      <div className="absolute top-4 right-1.5 w-0.5 h-44 bg-white/20 blur-[0.5px]" />
     </div>
   );
 };
