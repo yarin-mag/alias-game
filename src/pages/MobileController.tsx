@@ -79,16 +79,20 @@ const getWaitingMessage = (gameState: GameSyncState | null): string => {
     return 'Wait for your turn to start...';
 };
 
-const MobileController: React.FC = () => {
-    const { hostId, teamId } = useParams<{ hostId: string; teamId?: 'blue' | 'red' }>();
-    const [status, setStatus] = useState<'connecting' | 'connected' | 'error' | 'rejected'>('connecting');
-    const [rejectionReason, setRejectionReason] = useState<string>('');
-    const [gameState, setGameState] = useState<GameSyncState | null>(null);
+// Swipeable Card Component - encapsulates motion state per card
+interface SwipeableCardProps {
+    word: string;
+    gamePhase: string;
+    isPaused: boolean;
+    onSwipeLeft: () => void;
+    onSwipeRight: () => void;
+}
 
-    // Swipe gesture state
+const SwipeableCard: React.FC<SwipeableCardProps> = ({ word, gamePhase, isPaused, onSwipeLeft, onSwipeRight }) => {
+    // Swipe gesture state - isolated per card instance
     const x = useMotionValue(0);
     const rotate = useTransform(x, [-300, 300], [-30, 30]);
-    // Keep card visible during swipe, only fade slightly at extremes
+    // Keep card visible during swipe
     const opacity = useTransform(x, [-400, -200, 0, 200, 400], [0.7, 0.9, 1, 0.9, 0.7]);
 
     // Background hint opacities
@@ -104,6 +108,104 @@ const MobileController: React.FC = () => {
     // Spring animation for smooth movement
     const springConfig = { damping: 20, stiffness: 300 };
     const xSpring = useSpring(x, springConfig);
+
+    const handleDragEnd = (event: any, info: any) => {
+        const threshold = 100;
+        const velocity = info.velocity.x;
+
+        if (Math.abs(info.offset.x) > threshold || Math.abs(velocity) > 500) {
+            if (info.offset.x > 0 || velocity > 0) {
+                // Swiped right
+                if (!isPaused) {
+                    onSwipeRight();
+                }
+            } else {
+                // Swiped left
+                if (!isPaused) {
+                    onSwipeLeft();
+                }
+            }
+        }
+
+        // Reset
+        x.stop();
+        x.set(0);
+    };
+
+    const getFontSize = (text: string) => {
+        if (text.length > 20) return 'text-2xl';
+        if (text.length > 12) return 'text-3xl';
+        if (text.length > 8) return 'text-4xl';
+        return 'text-5xl';
+    };
+
+    return (
+        <div className="relative w-full flex items-center justify-center" style={{ perspective: 1000 }}>
+            {/* Background hints for swipe direction */}
+            <motion.div
+                className="absolute inset-0 flex items-center justify-center pointer-events-none"
+                style={{ opacity: hintOpacity }}
+            >
+                <div className="flex items-center gap-8 w-full px-8">
+                    <motion.div
+                        className="flex-1 flex items-center justify-center"
+                        style={{ opacity: skipHintOpacity }}
+                    >
+                        <X className="w-16 h-16 text-destructive" />
+                    </motion.div>
+                    <motion.div
+                        className="flex-1 flex items-center justify-center"
+                        style={{ opacity: correctHintOpacity }}
+                    >
+                        <Check className="w-16 h-16 text-success" />
+                    </motion.div>
+                </div>
+            </motion.div>
+
+            <motion.div
+                drag={isPaused ? false : "x"}
+                dragConstraints={{ left: -400, right: 400 }}
+                dragElastic={0.3}
+                onDragEnd={handleDragEnd}
+                style={{
+                    x: xSpring,
+                    rotate,
+                    opacity,
+                    cursor: isPaused ? 'default' : 'grab',
+                }}
+                dragMomentum={false}
+                whileDrag={{ cursor: 'grabbing', scale: 1.05 }}
+                initial={{ scale: 0.8, opacity: 0, y: 20 }}
+                animate={{
+                    scale: 1,
+                    opacity: 1,
+                    y: 0
+                }}
+                exit={{ scale: 1.1, opacity: 0, y: -20 }}
+                className="text-center w-full relative z-10 touch-none select-none"
+            >
+                <motion.div
+                    className={`${getFontSize(word)} font-black mb-2 tracking-tight text-foreground px-4 py-8 rounded-2xl`}
+                    style={{ backgroundColor }}
+                >
+                    {word}
+                </motion.div>
+                {/* Swipe hint */}
+                <div className="text-muted-foreground/60 text-xs mt-4">
+                    {gamePhase === 'specialTurn'
+                        ? 'Swipe left for opponent • Swipe right for your team'
+                        : 'Swipe left to skip • Swipe right for correct'}
+                </div>
+            </motion.div>
+        </div>
+    );
+};
+
+const MobileController: React.FC = () => {
+    const { hostId, teamId } = useParams<{ hostId: string; teamId?: 'blue' | 'red' }>();
+    const [status, setStatus] = useState<'connecting' | 'connected' | 'error' | 'rejected'>('connecting');
+    const [rejectionReason, setRejectionReason] = useState<string>('');
+    const [gameState, setGameState] = useState<GameSyncState | null>(null);
 
     const lastSeenRef = useRef<number>(Date.now());
     const [reconnectCount, setReconnectCount] = useState(0);
@@ -198,63 +300,6 @@ const MobileController: React.FC = () => {
         if (navigator.vibrate) navigator.vibrate(50);
     };
 
-    // Handle drag end - check if swipe threshold was met
-    const handleDragEnd = (event: any, info: any) => {
-        const threshold = 100; // Minimum distance to trigger action
-        const velocity = info.velocity.x;
-
-        // Check if dragged far enough or fast enough
-        if (Math.abs(info.offset.x) > threshold || Math.abs(velocity) > 500) {
-            if (info.offset.x > 0 || velocity > 0) {
-                // Swiped right
-                if (gameState && shouldShowCard(gameState) && !gameState.isPaused) {
-                    // Special turn: team guessed correctly
-                    if (gameState.gamePhase === 'specialTurn') {
-                        sendAction('SPECIAL_TEAM_GUESSED');
-                    } else {
-                        // Normal turn: correct
-                        sendAction('CORRECT');
-                    }
-                    // Vibrate for feedback
-                    if (navigator.vibrate) navigator.vibrate(100);
-                }
-            } else {
-                // Swiped left
-                if (gameState && shouldShowCard(gameState) && !gameState.isPaused) {
-                    // Special turn: opponent guessed correctly
-                    if (gameState.gamePhase === 'specialTurn') {
-                        sendAction('SPECIAL_OPPONENT_GUESSED');
-                    } else {
-                        // Normal turn: skip
-                        sendAction('SKIP');
-                    }
-                    // Vibrate for feedback
-                    if (navigator.vibrate) navigator.vibrate(100);
-                }
-            }
-        }
-
-        // Immediately reset position - stop any animations first
-        x.stop();
-        x.set(0);
-    };
-
-    // Reset x position when word changes - ensure it's always centered
-    // Use a ref to track the previous word index to detect changes
-    const prevWordIndexRef = useRef<number | undefined>(undefined);
-
-    useEffect(() => {
-        const currentWordIndex = gameState?.currentWordIndex;
-        if (currentWordIndex !== undefined && currentWordIndex !== prevWordIndexRef.current) {
-            // Word index changed - immediately reset to center
-            // Stop any ongoing animations first
-            x.stop();
-            // Then immediately set to 0
-            x.set(0);
-            prevWordIndexRef.current = currentWordIndex;
-        }
-    }, [gameState?.currentWordIndex, x]);
-
     if (status === 'connecting') {
         return (
             <div className="min-h-screen bg-background flex flex-col items-center justify-center p-6 text-center">
@@ -332,76 +377,32 @@ const MobileController: React.FC = () => {
                 {/* Current Word Display with Swipe Gestures */}
                 <AnimatePresence mode="wait">
                     {gameState && shouldShowCard(gameState) ? (
-                        <div className="relative w-full flex items-center justify-center" style={{ perspective: 1000 }}>
-                            {/* Background hints for swipe direction */}
-                            <motion.div
-                                className="absolute inset-0 flex items-center justify-center pointer-events-none"
-                                style={{ opacity: hintOpacity }}
-                            >
-                                <div className="flex items-center gap-8 w-full px-8">
-                                    <motion.div
-                                        className="flex-1 flex items-center justify-center"
-                                        style={{ opacity: skipHintOpacity }}
-                                    >
-                                        <X className="w-16 h-16 text-destructive" />
-                                    </motion.div>
-                                    <motion.div
-                                        className="flex-1 flex items-center justify-center"
-                                        style={{ opacity: correctHintOpacity }}
-                                    >
-                                        <Check className="w-16 h-16 text-success" />
-                                    </motion.div>
-                                </div>
-                            </motion.div>
-
-                            {/* Swipeable Word Card */}
-                            <motion.div
-                                key={gameState.gamePhase === 'specialTurn'
-                                    ? `special-${gameState.specialTurnCardIndex}-${gameState.specialTurnTeamPosition ? gameState.specialTurnTeamPosition % 10 : 0}`
-                                    : `word-${gameState.currentCard?.id}-${gameState.currentWordIndex}`}
-                                drag={gameState?.isPaused ? false : "x"}
-                                dragConstraints={{ left: -400, right: 400 }}
-                                dragElastic={0.3}
-                                onDragEnd={handleDragEnd}
-                                style={{
-                                    x: xSpring,
-                                    rotate,
-                                    opacity,
-                                    cursor: gameState?.isPaused ? 'default' : 'grab',
-                                }}
-                                dragMomentum={false}
-                                whileDrag={{ cursor: 'grabbing', scale: 1.05 }}
-                                initial={{ scale: 0.8, opacity: 0, y: 20 }}
-                                animate={{
-                                    scale: 1,
-                                    opacity: 1,
-                                    y: 0
-                                }}
-                                onAnimationStart={() => {
-                                    // Immediately stop and reset position when new word appears
-                                    // This ensures the card starts at center position
-                                    x.stop();
-                                    x.set(0);
-                                }}
-                                exit={{ scale: 1.1, opacity: 0, y: -20 }}
-                                className="text-center w-full relative z-10 touch-none select-none"
-                            >
-                                <motion.div
-                                    className="text-5xl font-black mb-2 tracking-tight text-foreground px-4 py-8 rounded-2xl"
-                                    style={{ backgroundColor }}
-                                >
-                                    {gameState.gamePhase === 'specialTurn' && gameState.specialTurnCard && gameState.specialTurnTeamPosition !== undefined
-                                        ? gameState.specialTurnCard.words[gameState.specialTurnTeamPosition % 10]
-                                        : gameState.currentCard?.words[gameState.currentWordIndex]}
-                                </motion.div>
-                                {/* Swipe hint */}
-                                <div className="text-muted-foreground/60 text-xs mt-4">
-                                    {gameState.gamePhase === 'specialTurn'
-                                        ? 'Swipe left for opponent • Swipe right for your team'
-                                        : 'Swipe left to skip • Swipe right for correct'}
-                                </div>
-                            </motion.div>
-                        </div>
+                        <SwipeableCard
+                            key={gameState.gamePhase === 'specialTurn'
+                                ? `special-${gameState.specialTurnCardIndex}-${gameState.specialTurnTeamPosition ? gameState.specialTurnTeamPosition % 10 : 0}`
+                                : `word-${gameState.currentCard?.id}-${gameState.currentWordIndex}`}
+                            word={gameState.gamePhase === 'specialTurn' && gameState.specialTurnCard && gameState.specialTurnTeamPosition !== undefined
+                                ? gameState.specialTurnCard.words[gameState.specialTurnTeamPosition % 10]
+                                : gameState.currentCard?.words[gameState.currentWordIndex] || ''}
+                            gamePhase={gameState.gamePhase}
+                            isPaused={gameState.isPaused}
+                            onSwipeLeft={() => {
+                                if (gameState.gamePhase === 'specialTurn') {
+                                    sendAction('SPECIAL_OPPONENT_GUESSED');
+                                } else {
+                                    sendAction('SKIP');
+                                }
+                                if (navigator.vibrate) navigator.vibrate(100);
+                            }}
+                            onSwipeRight={() => {
+                                if (gameState.gamePhase === 'specialTurn') {
+                                    sendAction('SPECIAL_TEAM_GUESSED');
+                                } else {
+                                    sendAction('CORRECT');
+                                }
+                                if (navigator.vibrate) navigator.vibrate(100);
+                            }}
+                        />
                     ) : (
                         <div className="text-center text-muted-foreground">
                             {getWaitingMessage(gameState)}

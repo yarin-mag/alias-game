@@ -141,13 +141,14 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
 
   const handleCorrect = useCallback(() => {
     playSound('correct', gameState.soundEnabled);
-    const nextCard = getNextCard(gameState);
+    const digit = getDigitAtPosition(currentTeam.position);
+    const nextCard = getNextCard(gameState, digit);
     if (nextCard) {
       const currentWord = getCurrentWord(currentCard!, currentTeam.position);
       setCurrentCard(nextCard);
       setGameState((prev) => ({
         ...prev,
-        usedCardIds: [...prev.usedCardIds, nextCard.id],
+        usedWords: [...(prev.usedWords || []), `${nextCard.id}-${digit}`], // Track specific word as used
         currentCard: nextCard,
         turnCorrect: prev.turnCorrect + 1,
         lastUnresolvedWord: getCurrentWord(nextCard, currentTeam.position),
@@ -161,12 +162,13 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
 
   const handleSkip = useCallback(() => {
     playSound('skip', gameState.soundEnabled);
-    const nextCard = getNextCard(gameState);
+    const digit = getDigitAtPosition(currentTeam.position);
+    const nextCard = getNextCard(gameState, digit);
     if (nextCard) {
       setCurrentCard(nextCard);
       setGameState((prev) => ({
         ...prev,
-        usedCardIds: [...prev.usedCardIds, nextCard.id],
+        usedWords: [...(prev.usedWords || []), `${nextCard.id}-${digit}`],
         currentCard: nextCard,
         turnSkipped: prev.turnSkipped + 1,
         lastUnresolvedWord: getCurrentWord(nextCard, currentTeam.position),
@@ -207,8 +209,9 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
   }, [currentCard, gameState.turnCorrect, gameState.turnSkipped, currentTeam.position, gameState.allowNegative, setGameState]);
 
   const handleStartSpecialTurn = useCallback(() => {
-    const cards = getCardsForSpecialTurn(gameState, 5); // Get 5 cards for special turn
-    const pickedIds = cards.map(c => c.id);
+    const digit = getDigitAtPosition(currentTeam.position);
+    const cards = getCardsForSpecialTurn(gameState, 5, digit); // Get 5 cards for special turn
+    const usedWordKeys = cards.map(c => `${c.id}-${digit}`);
 
     // Stop the timer for special turn (no time limit)
     setIsRunning(false);
@@ -218,7 +221,7 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
       ...prev,
       phase: 'specialTurn',
       specialTurnCards: cards,
-      usedCardIds: [...prev.usedCardIds, ...pickedIds],
+      usedWords: [...(prev.usedWords || []), ...usedWordKeys],
       currentCardIndex: 0,
       currentTurnCorrectWords: [], // Clear list for special turn
       specialTurnResults: {
@@ -226,7 +229,7 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
         opponentPoints: 0
       }
     }));
-  }, [gameState, setGameState]);
+  }, [gameState, setGameState, currentTeam.position]);
 
   const handleStartTurn = useCallback(() => {
     // Check if current position is a special turn position
@@ -239,7 +242,9 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
 
     setGameState((prev) => {
       if (prev.phase !== 'playing') return prev;
-      const card = getNextCard(prev);
+
+      const digit = getDigitAtPosition(currentTeam.position);
+      const card = getNextCard(prev, digit);
       if (!card) return prev;
 
       setCurrentCard(card);
@@ -249,14 +254,14 @@ const GameScreen: React.FC<GameScreenProps> = ({ gameState, setGameState, onRese
       return {
         ...prev,
         phase: 'turnActive',
-        usedCardIds: [...prev.usedCardIds, card.id],
+        usedWords: [...(prev.usedWords || []), `${card.id}-${digit}`],
         currentCard: card,
         turnCorrect: 0,
         turnSkipped: 0,
         currentTurnCorrectWords: [], // Clear correct words for new turn
       };
     });
-  }, [setGameState, gameState.teams, gameState.currentTeamIndex, handleStartSpecialTurn]);
+  }, [setGameState, gameState.teams, gameState.currentTeamIndex, handleStartSpecialTurn, currentTeam.position]);
 
   const handleSpecialTeamGuessed = useCallback(() => {
     playSound('correct', gameState.soundEnabled);

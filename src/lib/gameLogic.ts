@@ -1,4 +1,4 @@
-import { getWordBank, Language } from './wordBanks';
+import { hebrewByDifficulty, englishByDifficulty, Language } from './wordBanks';
 
 export interface Card {
   id: number;
@@ -22,7 +22,8 @@ export interface GameState {
   teams: [Team, Team];
   currentTeamIndex: 0 | 1;
   deck: Card[];
-  usedCardIds: number[];
+  usedCardIds: number[]; // Deprecated, kept for backward compatibility if needed, but we rely on usedWords now
+  usedWords: string[]; // Format: "${cardId}-${digit}"
   currentCardIndex: number;
   turnDuration: number;
   allowNegative: boolean;
@@ -138,18 +139,83 @@ export const getDigitAtPosition = (position: number): number => {
   return position % 10;
 };
 
-// Generate deck of cards
-export const generateDeck = (language: Language): Card[] => {
-  const words = getWordBank(language);
-  const shuffled = [...words].sort(() => Math.random() - 0.5);
-  const cards: Card[] = [];
+// Difficulty Weights defined in requirements
+// Easy: 40%, Medium: 30%, Phrases: 10%, Slang: 10%, Hard: 5%, Idioms: 5%
+const DIFFICULTY_WEIGHTS = [
+  { type: 'easy', weight: 0.40 },
+  { type: 'medium', weight: 0.30 },
+  { type: 'phrases', weight: 0.10 },
+  { type: 'slang', weight: 0.10 },
+  { type: 'hard', weight: 0.05 },
+  { type: 'idioms', weight: 0.05 },
+] as const;
 
-  // Create cards with 10 words each
-  for (let i = 0; i < Math.floor(shuffled.length / 10); i++) {
-    cards.push({
-      id: i,
-      words: shuffled.slice(i * 10, (i + 1) * 10),
-    });
+type DifficultyType = typeof DIFFICULTY_WEIGHTS[number]['type'];
+
+const getRandomDifficulty = (): DifficultyType => {
+  const random = Math.random();
+  let acc = 0;
+  for (const { type, weight } of DIFFICULTY_WEIGHTS) {
+    acc += weight;
+    if (random < acc) return type;
+  }
+  return 'easy'; // Fallback
+};
+
+// Generate deck of cards with weighted difficulty
+export const generateDeck = (language: Language): Card[] => {
+  const wordBanks = language === 'he' ? hebrewByDifficulty : englishByDifficulty;
+  const cards: Card[] = [];
+  const usedWordsInDeck = new Set<string>();
+
+  // We desire a deck of reasonable size, e.g., 50 cards (500 words)
+  // or use all available words if fewer.
+  // Given duplicate prevention, we might hit limits.
+  const TOTAL_CARDS = 50;
+  const WORDS_PER_CARD = 10;
+
+  for (let i = 0; i < TOTAL_CARDS; i++) {
+    const cardWords: string[] = [];
+
+    // Try to fill the card
+    let attempts = 0;
+    while (cardWords.length < WORDS_PER_CARD && attempts < 100) { // Limit attempts to prevent infinite loop
+      attempts++;
+
+      const difficulty = getRandomDifficulty();
+      // @ts-ignore - Typescript might complain about specific keys but we know they match
+      const pool = wordBanks[difficulty];
+
+      if (!pool || pool.length === 0) continue;
+
+      const randomWord = pool[Math.floor(Math.random() * pool.length)];
+
+      if (!usedWordsInDeck.has(randomWord) && !cardWords.includes(randomWord)) {
+        cardWords.push(randomWord);
+        usedWordsInDeck.add(randomWord);
+      }
+    }
+
+    // If we couldn't fill the card fully (ran out of unique words?), fill with any available unique words from 'all'
+    if (cardWords.length < WORDS_PER_CARD) {
+      const allWords = wordBanks.all;
+      const shuffledAll = [...allWords].sort(() => Math.random() - 0.5);
+      for (const word of shuffledAll) {
+        if (cardWords.length >= WORDS_PER_CARD) break;
+        if (!usedWordsInDeck.has(word) && !cardWords.includes(word)) {
+          cardWords.push(word);
+          usedWordsInDeck.add(word);
+        }
+      }
+    }
+
+    // Only add card if it is full (or mostly full if we really ran out of words)
+    if (cardWords.length === WORDS_PER_CARD) {
+      cards.push({
+        id: i,
+        words: cardWords
+      });
+    }
   }
 
   // Shuffle cards
@@ -196,6 +262,7 @@ export const createInitialState = (
     currentTeamIndex: 0,
     deck: generateDeck(language),
     usedCardIds: [],
+    usedWords: [],
     currentCardIndex: 0,
     turnDuration,
     allowNegative,
@@ -247,19 +314,32 @@ export const clearSavedGame = (hostId?: string): void => {
   localStorage.removeItem(getStorageKey(hostId));
 };
 
-// Get available card (not used yet)
-export const getNextCard = (state: GameState): Card | null => {
-  const availableCards = state.deck.filter(card => !state.usedCardIds.includes(card.id));
+// Get available card based on current digit position
+export const getNextCard = (state: GameState, digit: number): Card | null => {
+  // Find a card where this specific word index hasn't been used yet
+  // We prioritize cards that have been used least? No, random is fine.
+  // We need to iterate through the deck and find one where cardId-digit is not in usedWords.
+
+  // First, verify usedWords exists (migration safety)
+  const usedWords = state.usedWords || [];
+
+  const availableCards = state.deck.filter(card => !usedWords.includes(`${card.id}-${digit}`));
+
   if (availableCards.length === 0) {
-    // Reshuffle if all cards used
+    // If all words at this digit are used, we must reuse.
+    // Pick a random card from the deck.
     return state.deck[Math.floor(Math.random() * state.deck.length)];
   }
-  return availableCards[0];
+
+  // Return a random available card to keep it unpredictable
+  // (Though deck is already shuffled, picking [0] is fine, but random is safer if deck order is static)
+  return availableCards[Math.floor(Math.random() * availableCards.length)];
 };
 
 // Get multiple cards for special turn
-export const getCardsForSpecialTurn = (state: GameState, count: number): Card[] => {
-  const availableCards = state.deck.filter(card => !state.usedCardIds.includes(card.id));
+export const getCardsForSpecialTurn = (state: GameState, count: number, digit: number): Card[] => {
+  const usedWords = state.usedWords || [];
+  const availableCards = state.deck.filter(card => !usedWords.includes(`${card.id}-${digit}`));
 
   // If we have enough available cards, use them
   if (availableCards.length >= count) {
@@ -271,9 +351,17 @@ export const getCardsForSpecialTurn = (state: GameState, count: number): Card[] 
   const picked = [...availableCards];
   const remainingCount = count - picked.length;
 
+  // Get other cards that are NOT in picked yet (to avoid picking same card twice in one special turn if possible)
+  const otherCards = state.deck.filter(card => !picked.includes(card));
+  const shuffledOthers = [...otherCards].sort(() => Math.random() - 0.5);
+
   for (let i = 0; i < remainingCount; i++) {
-    const randomCard = state.deck[Math.floor(Math.random() * state.deck.length)];
-    picked.push(randomCard);
+    if (i < shuffledOthers.length) {
+      picked.push(shuffledOthers[i]);
+    } else {
+      // If we somehow ran out of distinct cards, reuse any
+      picked.push(state.deck[Math.floor(Math.random() * state.deck.length)]);
+    }
   }
 
   return picked;

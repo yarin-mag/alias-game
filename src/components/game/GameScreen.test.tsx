@@ -44,6 +44,7 @@ const createMockGameState = (overrides: Partial<GameState> = {}): GameState => (
     { name: 'Red Team', color: 'red' as const, position: 0 },
   ],
   currentTeamIndex: 0 as 0 | 1,
+  deck: [],
   phase: 'playing' as const,
   turnDuration: 60,
   allowNegative: false,
@@ -56,16 +57,23 @@ const createMockGameState = (overrides: Partial<GameState> = {}): GameState => (
   specialTurnCards: [],
   currentCardIndex: 0,
   specialTurnResults: { teamPoints: 0, opponentPoints: 0 },
+  usedWords: [],
+  timeLeft: 60,
+  turnCorrect: 0,
+  turnSkipped: 0,
+  currentTurnCorrectWords: [],
+  soundEnabled: true,
+  currentCard: null,
   ...overrides,
 });
 
 const renderGameScreen = (gameState: GameState, setGameState = vi.fn(), onReset = vi.fn()) => {
   return render(
     <BrowserRouter>
-      <GameScreen 
-        gameState={gameState} 
-        setGameState={setGameState} 
-        onReset={onReset} 
+      <GameScreen
+        gameState={gameState}
+        setGameState={setGameState}
+        onReset={onReset}
       />
     </BrowserRouter>
   );
@@ -77,7 +85,7 @@ describe('GameScreen Controller-Host Communication', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    
+
     // Create mock connection
     mockConnection = {
       on: vi.fn(),
@@ -111,10 +119,10 @@ describe('GameScreen Controller-Host Communication', () => {
 
       return (
         <BrowserRouter>
-          <GameScreen 
-            gameState={gameState} 
-            setGameState={setGameState} 
-            onReset={() => {}} 
+          <GameScreen
+            gameState={gameState}
+            setGameState={setGameState}
+            onReset={() => { }}
           />
         </BrowserRouter>
       );
@@ -129,7 +137,7 @@ describe('GameScreen Controller-Host Communication', () => {
 
     // Get the connection callback that was registered
     const connectionCallback = mockPeerManager.onConnection.mock.calls[0][0];
-    
+
     // Simulate a controller connecting
     connectionCallback(mockConnection);
 
@@ -166,10 +174,10 @@ describe('GameScreen Controller-Host Communication', () => {
 
       return (
         <BrowserRouter>
-          <GameScreen 
-            gameState={gameState} 
-            setGameState={setGameState} 
-            onReset={() => {}} 
+          <GameScreen
+            gameState={gameState}
+            setGameState={setGameState}
+            onReset={() => { }}
           />
         </BrowserRouter>
       );
@@ -224,10 +232,10 @@ describe('GameScreen Controller-Host Communication', () => {
 
       return (
         <BrowserRouter>
-          <GameScreen 
-            gameState={gameState} 
-            setGameState={setGameState} 
-            onReset={() => {}} 
+          <GameScreen
+            gameState={gameState}
+            setGameState={setGameState}
+            onReset={() => { }}
           />
         </BrowserRouter>
       );
@@ -278,7 +286,7 @@ describe('GameScreen Controller-Host Communication', () => {
     // Mock multiple controllers
     const mockController1 = { teamColor: 'blue', connection: { send: vi.fn(), peer: 'controller1' } };
     const mockController2 = { teamColor: 'red', connection: { send: vi.fn(), peer: 'controller2' } };
-    
+
     mockPeerManager.getAllControllerConnections.mockReturnValue([mockController1, mockController2]);
     mockPeerManager.getConnectionCount.mockReturnValue(2);
 
@@ -290,10 +298,10 @@ describe('GameScreen Controller-Host Communication', () => {
 
       return (
         <BrowserRouter>
-          <GameScreen 
-            gameState={gameState} 
-            setGameState={setGameState} 
-            onReset={() => {}} 
+          <GameScreen
+            gameState={gameState}
+            setGameState={setGameState}
+            onReset={() => { }}
           />
         </BrowserRouter>
       );
@@ -333,10 +341,10 @@ describe('GameScreen Controller-Host Communication', () => {
 
       return (
         <BrowserRouter>
-          <GameScreen 
-            gameState={gameState} 
-            setGameState={setGameState} 
-            onReset={() => {}} 
+          <GameScreen
+            gameState={gameState}
+            setGameState={setGameState}
+            onReset={() => { }}
           />
         </BrowserRouter>
       );
